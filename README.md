@@ -33,14 +33,23 @@
 │ Завантаження│     │ Нормалізація │     │ Індикатори   │     │ HTML-звіти  │
 │ ZIP з CFTC  │     │ + QA         │     │ + Сигнали    │     │             │
 └─────────────┘     └──────────────┘     └──────────────┘     └─────────────┘
-                           │
-                           │
-                           ▼
-                    ┌──────────────┐
-                    │  ML BACKUP   │
-                    │              │
-                    │ ML датасет   │
-                    └──────────────┘
+      │                     │                     │
+      │                     │                     │
+      │                     ▼                     │
+      │              ┌──────────────┐            │
+      │              │  ML BACKUP   │            │
+      │              │              │            │
+      │              │ ML датасет   │            │
+      │              └──────────────┘            │
+      │                                           │
+      └------------------> │                      │
+                           ▼                      │
+                    ┌──────────────┐             │
+                    │   REGISTRY   │             │
+                    │              │             │
+                    │ Реєстр       │             │
+                    │ контрактів   │             │
+                    └──────────────┘             │
 ```
 
 ### Етапи Pipeline
@@ -69,6 +78,11 @@
    - Створює очищений датасет для ML
    - Виключає технічні колонки (raw_source_*)
 
+6. **REGISTRY** (`src/registry/`)
+   - Будує реєстр всіх контрактів з raw snapshots
+   - Агрегує інформацію про контракти (first_seen, last_seen, names)
+   - Створює contracts_registry.parquet
+
 ---
 
 ## 📁 Структура проекту
@@ -96,7 +110,9 @@ cot-mvp/
 │   │   ├── cot_weekly_ml.parquet
 │   │   └── cot_weekly_ml.csv
 │   │
-│   └── registry/                 # (для майбутнього використання)
+│   └── registry/                 # Реєстр контрактів
+│       ├── contracts_registry.parquet
+│       └── contracts_registry.csv
 │
 ├── reports/                      # HTML-звіти
 │   └── YYYY-MM-DD/
@@ -120,6 +136,10 @@ cot-mvp/
 │   │   ├── run_ml_backup.py     # ML backup generator
 │   │   └── canonical_schema.py  # (legacy schema reference)
 │   │
+│   ├── registry/                 # Модуль реєстру контрактів
+│   │   ├── run_registry.py      # Головний runner
+│   │   └── build_registry.py    # Побудова реєстру
+│   │
 │   ├── indicators/               # Модуль індикаторів
 │   │   ├── run_indicators.py    # Головний runner
 │   │   ├── cot_indicators.py    # Розрахунок індикаторів
@@ -131,7 +151,8 @@ cot-mvp/
 │       └── template.html        # HTML шаблон
 │
 ├── docs/                         # Документація
-│   └── CR-001_refresh_window.md
+│   ├── CR-001_refresh_window.md
+│   └── CR-002_registry_all_assets.md
 │
 ├── requirements.txt              # Python залежності
 └── README.md                     # Цей файл
@@ -309,6 +330,45 @@ cot-mvp/
 
 ---
 
+### 6. REGISTRY (`src/registry/run_registry.py`)
+
+**Призначення:** Побудова реєстру всіх контрактів з raw snapshots
+
+**Вхідні дані:**
+- ZIP-файли з `data/raw/manifest.csv` (тільки статус OK)
+- Конфігурація dataset (hardcoded: "legacy_futures_only")
+
+**Процес:**
+1. Читає manifest, обирає latest OK snapshot per year
+2. Для кожного ZIP:
+   - Відкриває `annual.txt` з ZIP
+   - Витягує contract_code, market_and_exchange_name, report_date
+3. Агрегує по contract_code:
+   - first_seen_report_date = min(report_date)
+   - last_seen_report_date = max(report_date)
+   - market_and_exchange_name = latest non-null (by max report_date)
+4. Додає колонки: sector="UNKNOWN", market_name=None, exchange_name=None
+5. Валідує contract_code (len==6)
+
+**Вихідні дані:**
+- `data/registry/contracts_registry.parquet`
+- `data/registry/contracts_registry.csv` (якщо `--csv`)
+
+**Схема registry:**
+- `contract_code` (str, len=6) - CFTC Contract Market Code
+- `market_and_exchange_name` (str) - Raw name from annual.txt
+- `first_seen_report_date` (date) - Earliest appearance
+- `last_seen_report_date` (date) - Latest appearance
+- `sector` (str) - Sector classification (MVP: "UNKNOWN")
+- `market_name` (nullable) - Parsed market name (optional)
+- `exchange_name` (nullable) - Parsed exchange name (optional)
+
+**Ключові файли:**
+- `run_registry.py` - головна логіка
+- `build_registry.py` - `build_registry()` функція
+
+---
+
 ## ⚙️ Конфігурація
 
 ### `configs/markets.yaml`
@@ -354,6 +414,9 @@ python -m src.report.run_report
 
 # 5. (Опційно) ML backup
 python -m src.normalize.run_ml_backup --csv
+
+# 6. (Опційно) Registry - реєстр всіх контрактів
+python -m src.registry.run_registry --csv
 ```
 
 ### Параметри
@@ -371,6 +434,11 @@ python -m src.normalize.run_normalize --root . --log-level INFO
 **ML Backup:**
 ```bash
 python -m src.normalize.run_ml_backup --csv  # Додає CSV файл
+```
+
+**Registry:**
+```bash
+python -m src.registry.run_registry --csv  # Додає CSV файл
 ```
 
 ---
@@ -484,6 +552,7 @@ pip install -r requirements.txt
 - ✅ Indicators: Працює, генерація сигналів ACTIVE/PAUSE
 - ✅ Report: Працює, HTML звіти з графіками
 - ✅ ML Backup: Працює, очищений датасет
+- ✅ Registry: Працює, реєстр контрактів
 
 **Дані:**
 - Період: 2015-01-06 до 2025-12-16

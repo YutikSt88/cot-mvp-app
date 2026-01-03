@@ -4,29 +4,11 @@ source:
   cftc_historical_zip_url_template: "https://www.cftc.gov/files/dea/history/deacot{year}.zip"  # :contentReference[oaicite:1]{index=1}
 
 markets:
-  - key: "EUR"
-    match:
-      any_of:
-        - "EURO FX"
-      exchange_any_of:
-        - "CHICAGO MERCANTILE EXCHANGE"
-  - key: "JPY"
-    match:
-      any_of:
-        - "JAPANESE YEN"
-      exchange_any_of:
-        - "CHICAGO MERCANTILE EXCHANGE"
-  - key: "GBP"
-    match:
-      any_of:
-        - "BRITISH POUND"
-        - "BRITISH POUND STERLING"
-      exchange_any_of:
-        - "CHICAGO MERCANTILE EXCHANGE"
-  - key: "GOLD"
-    match:
-      any_of:
-        - "GOLD"
-      exchange_any_of:
-        - "COMMODITY EXCHANGE INC"
-        - "COMEX"
+  - market_key: "EUR"
+    contract_code: "099741"
+  - market_key: "JPY"
+    contract_code: "097741"
+  - market_key: "GBP"
+    contract_code: "096742"
+  - market_key: "GOLD"
+    contract_code: "088691"
