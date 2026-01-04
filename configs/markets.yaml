@@ -1,18 +1,43 @@
-# configs/markets.yaml
 source:
-  dataset: "legacy_futures_only"
-  cftc_historical_zip_url_template: "https://www.cftc.gov/files/dea/history/deacot{year}.zip"  # :contentReference[oaicite:1]{index=1}
-
+  dataset: legacy_futures_only
+  cftc_historical_zip_url_template: https://www.cftc.gov/files/dea/history/deacot{year}.zip
 markets:
-  - market_key: "EUR"
-    contract_code: "099741"
-    category: "FX"
-  - market_key: "JPY"
-    contract_code: "097741"
-    category: "FX"
-  - market_key: "GBP"
-    contract_code: "096742"
-    category: "FX"
-  - market_key: "GOLD"
-    contract_code: "088691"
-    category: "METALS"
+- market_key: US100
+  contract_code: "20974A"
+  category: EQUITY_INDEX
+- market_key: US2000
+  contract_code: "239742"
+  category: EQUITY_INDEX
+- market_key: US30
+  contract_code: "12460+"
+  category: EQUITY_INDEX
+- market_key: US500
+  contract_code: "13874A"
+  category: EQUITY_INDEX
+- market_key: AUD
+  contract_code: "232741"
+  category: FX
+- market_key: CAD
+  contract_code: "090741"
+  category: FX
+- market_key: CHF
+  contract_code: "092741"
+  category: FX
+- market_key: EUR
+  contract_code: "099741"
+  category: FX
+- market_key: GBP
+  contract_code: "096742"
+  category: FX
+- market_key: NZD
+  contract_code: "112741"
+  category: FX
+- market_key: USD
+  contract_code: "098662"
+  category: FX
+- market_key: XAG
+  contract_code: "084691"
+  category: METALS
+- market_key: XAU
+  contract_code: "088691"
+  category: METALS
