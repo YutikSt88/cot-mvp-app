@@ -22,15 +22,15 @@
 
 ## 🏗 Архітектура Pipeline
 
-Проект реалізує чіткий ETL pipeline з 4 основними етапами:
+Проект реалізує чіткий ETL pipeline з 5 основними етапами:
 
 ```
-┌─────────────┐     ┌──────────────┐
-│   INGEST    │ --> │  NORMALIZE   │
-│             │     │              │
-│ Завантаження│     │ Нормалізація │
-│ ZIP з CFTC  │     │ + QA         │
-└─────────────┘     └──────────────┘
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│   INGEST    │ --> │  NORMALIZE   │ --> │   COMPUTE    │
+│             │     │              │     │              │
+│ Завантаження│     │ Нормалізація │     │ Metrics      │
+│ ZIP з CFTC  │     │ + QA         │     │ (skeleton)   │
+└─────────────┘     └──────────────┘     └──────────────┘
       │                     │
       │                     │
       │                     ▼
@@ -60,15 +60,22 @@
 2. **NORMALIZE** (`src/normalize/`)
    - Парсить `annual.txt` з ZIP-архівів
    - Фільтрує ринки через whitelist contract codes
-   - Створює canonical dataset з усіма групами трейдерів
+   - Створює canonical datasets:
+     - `cot_weekly_canonical.parquet` (legacy, NC-only)
+     - `cot_weekly_canonical_full.parquet` (COMM/NONCOMM/NONREPT long/short)
    - Виконує QA перевірки (blocking)
 
-3. **ML BACKUP** (`src/normalize/run_ml_backup.py`)
+3. **COMPUTE** (`src/compute/`)
+   - Читає canonical dataset
+   - Фільтрує по whitelist markets
+   - Створює metrics dataset (skeleton, identity columns only)
+
+4. **ML BACKUP** (`src/normalize/run_ml_backup.py`)
    - Створює очищений датасет для ML з canonical (за замовчуванням)
    - Режим `--all-assets`: створює повний датасет всіх контрактів з raw snapshots
    - Виключає технічні колонки (raw_source_*)
 
-4. **REGISTRY** (`src/registry/`)
+5. **REGISTRY** (`src/registry/`)
    - Будує реєстр всіх контрактів з raw snapshots
    - Агрегує інформацію про контракти (first_seen, last_seen, names)
    - Створює contracts_registry.parquet
@@ -90,7 +97,11 @@ cot-mvp/
 │   │
 │   ├── canonical/                # Нормалізований датасет
 │   │   ├── cot_weekly_canonical.parquet
+│   │   ├── cot_weekly_canonical_full.parquet
 │   │   └── qa_report.txt
+│   │
+│   ├── compute/                  # Metrics dataset (skeleton)
+│   │   └── metrics_weekly.parquet
 │   │
 │   ├── ml/                       # ML-ready датасети
 │   │   ├── cot_weekly_ml.parquet
@@ -118,7 +129,13 @@ cot-mvp/
 │   │   ├── cot_parser.py        # Парсинг annual.txt
 │   │   ├── qa_checks.py         # QA перевірки
 │   │   ├── run_ml_backup.py     # ML backup generator
-│   │   └── canonical_schema.py  # (legacy schema reference)
+│   │   ├── canonical_schema.py  # (legacy schema reference)
+│   │   └── canonical_full_schema.py
+│   │
+│   ├── compute/                  # Модуль обчислень (skeleton)
+│   │   ├── run_compute.py       # Головний runner
+│   │   ├── build_metrics.py     # Побудова metrics
+│   │   └── validations.py       # Валідації
 │   │
 │   └── registry/                 # Модуль реєстру контрактів
 │       ├── run_registry.py      # Головний runner
@@ -191,17 +208,21 @@ cot-mvp/
 5. **Output:** Записує canonical parquet тільки якщо QA = OK
 
 **Вихідні дані:**
-- `data/canonical/cot_weekly_canonical.parquet`
+- `data/canonical/cot_weekly_canonical.parquet` (legacy, NC-only)
+- `data/canonical/cot_weekly_canonical_full.parquet` (COMM/NONCOMM/NONREPT long/short)
 - `data/canonical/qa_report.txt` (OK або список помилок)
 
-**Схема canonical:**
-- `market_key` (str) - ключ ринку (EUR, JPY, GBP, GOLD)
-- `contract_code` (str, 6 digits) - CFTC contract code
-- `report_date` (date) - дата звіту
-- `open_interest_all` (numeric) - загальний open interest
+**Схема canonical (legacy):**
+- `market_key`, `report_date`, `open_interest_all`
+- `nc_long`, `nc_short`, `nc_net` (Non-Commercial only)
+- `raw_source_year`, `raw_source_file`
+
+**Схема canonical_full:**
+- `market_key`, `report_date`, `contract_code`
+- `open_interest_all` (numeric)
 - `comm_long`, `comm_short`, `comm_net` - Commercial позиції
-- `noncomm_long`, `noncomm_short`, `noncomm_net` - Non-Commercial позиції
-- `nonrept_long`, `nonrept_short`, `nonrept_net` - Nonreportable позиції
+- `nc_long`, `nc_short`, `nc_net` - Non-Commercial позиції
+- `nr_long`, `nr_short`, `nr_net` - Nonreportable позиції
 - `raw_source_year`, `raw_source_file` - lineage
 
 **Ключові файли:**
@@ -211,7 +232,37 @@ cot-mvp/
 
 ---
 
-### 3. ML BACKUP (`src/normalize/run_ml_backup.py`)
+### 3. COMPUTE (`src/compute/run_compute.py`)
+
+**Призначення:** Створення metrics dataset (skeleton, identity columns only)
+
+**Вхідні дані:**
+- `data/canonical/cot_weekly_canonical.parquet`
+- `configs/markets.yaml`
+
+**Процес:**
+1. Читає canonical dataset
+2. Фільтрує по whitelist markets з `markets.yaml`
+3. Витягує тільки identity колонки: `market_key`, `category`, `contract_code`, `report_date`
+4. Виконує валідації (blocking): rows > 0, required columns, uniqueness
+
+**Вихідні дані:**
+- `data/compute/metrics_weekly.parquet`
+
+**Схема metrics:**
+- `market_key` (str) - ключ ринку
+- `category` (str) - категорія з markets.yaml
+- `contract_code` (str) - CFTC contract code
+- `report_date` (date) - дата звіту
+
+**Ключові файли:**
+- `run_compute.py` - головна логіка
+- `build_metrics.py` - `build_metrics_weekly()` функція
+- `validations.py` - валідації (`validate_metrics_df()`)
+
+---
+
+### 4. ML BACKUP (`src/normalize/run_ml_backup.py`)
 
 **Призначення:** Створення очищеного датасету для ML
 
@@ -273,7 +324,7 @@ cot-mvp/
 
 ---
 
-### 4. REGISTRY (`src/registry/run_registry.py`)
+### 5. REGISTRY (`src/registry/run_registry.py`)
 
 **Призначення:** Побудова реєстру всіх контрактів з raw snapshots
 
@@ -357,13 +408,16 @@ python -m src.ingest.run_ingest
 # 2. Нормалізація
 python -m src.normalize.run_normalize
 
-# 3. (Опційно) ML backup (з canonical)
+# 3. (Опційно) Compute metrics (skeleton)
+python -m src.compute.run_compute
+
+# 4. (Опційно) ML backup (з canonical)
 python -m src.normalize.run_ml_backup --csv
 
-# 3a. (Опційно) All-assets backup (всі контракти з raw)
+# 4a. (Опційно) All-assets backup (всі контракти з raw)
 python -m src.normalize.run_ml_backup --all-assets --csv
 
-# 4. (Опційно) Registry - реєстр всіх контрактів
+# 5. (Опційно) Registry - реєстр всіх контрактів
 python -m src.registry.run_registry --csv
 ```
 
@@ -377,6 +431,11 @@ python -m src.ingest.run_ingest --start-year 2011 --end-year 2025 --log-level IN
 **Normalize:**
 ```bash
 python -m src.normalize.run_normalize --root . --log-level INFO
+```
+
+**Compute:**
+```bash
+python -m src.compute.run_compute --root . --log-level INFO
 ```
 
 **ML Backup:**
@@ -397,22 +456,24 @@ python -m src.registry.run_registry --csv  # Додає CSV файл
 
 ## 📊 Структура даних
 
-### Canonical Dataset
+### Canonical Datasets
 
-**Файл:** `data/canonical/cot_weekly_canonical.parquet`
+**Legacy Canonical:** `data/canonical/cot_weekly_canonical.parquet`
+- **Гранулярність:** 1 рядок = 1 market_key × 1 report_date
+- **Колонки:** `market_key`, `report_date`, `open_interest_all`, `nc_long`, `nc_short`, `nc_net`, `raw_source_year`, `raw_source_file`
 
-**Гранулярність:** 1 рядок = 1 market_key × 1 report_date
-
-**Колонки:**
-- `market_key` (str): EUR, JPY, GBP, GOLD
-- `contract_code` (str, 6 digits): CFTC contract code
-- `report_date` (date): Дата звіту (вівторок COT тижня)
-- `open_interest_all` (numeric): Загальний open interest
-- `comm_long`, `comm_short`, `comm_net` (numeric): Commercial позиції
-- `noncomm_long`, `noncomm_short`, `noncomm_net` (numeric): Non-Commercial позиції
-- `nonrept_long`, `nonrept_short`, `nonrept_net` (numeric): Nonreportable позиції
-- `raw_source_year` (int): Рік джерела
-- `raw_source_file` (str): Назва файлу джерела
+**Full Canonical:** `data/canonical/cot_weekly_canonical_full.parquet`
+- **Гранулярність:** 1 рядок = 1 market_key × 1 report_date
+- **Колонки:**
+  - `market_key` (str): EUR, JPY, GBP, GOLD
+  - `contract_code` (str): CFTC contract code
+  - `report_date` (date): Дата звіту (вівторок COT тижня)
+  - `open_interest_all` (numeric): Загальний open interest
+  - `comm_long`, `comm_short`, `comm_net` (numeric): Commercial позиції
+  - `nc_long`, `nc_short`, `nc_net` (numeric): Non-Commercial позиції
+  - `nr_long`, `nr_short`, `nr_net` (numeric): Nonreportable позиції
+  - `raw_source_year` (int): Рік джерела
+  - `raw_source_file` (str): Назва файлу джерела
 
 ---
 
@@ -479,9 +540,12 @@ pip install -r requirements.txt
 
 **Поточний стан:**
 - ✅ Ingest: Працює, підтримує refresh window
-- ✅ Normalize: Працює, з QA перевірками
+- ✅ Normalize: Працює, з QA перевірками (canonical + canonical_full)
+- ✅ Compute: Працює, skeleton CLI (identity columns only)
 - ✅ ML Backup: Працює, очищений датасет (canonical + all-assets)
 - ✅ Registry: Працює, реєстр контрактів
+- ❌ Indicators: Видалено (legacy)
+- ❌ Report (HTML): Видалено (legacy)
 
 **Дані:**
 - Період: 2015-01-06 до 2025-12-16
@@ -635,6 +699,32 @@ Remove-Item -Recurse -Force data/, reports/, *.log, diff_*.txt
 
 ---
 
-**Версія документації:** 1.1  
-**Останнє оновлення:** 2026-01-03
+**Версія документації:** 1.1.2  
+**Останнє оновлення:** 2026-01-04
+
+---
+
+## 📦 Backup & Rollback
+
+### Створення backup'у
+
+```powershell
+# З кореня репозиторію
+powershell -ExecutionPolicy Bypass -File scripts\backup_project.ps1
+```
+
+Backup буде створено в `backups/cot-mvp_<TAG>_<TIMESTAMP>.zip`
+
+### Відновлення з backup'у
+
+Детальна інструкція: [`docs/rollback_restore.md`](docs/rollback_restore.md)
+
+**Швидкий старт:**
+```bash
+# Метод A: Git rollback
+git checkout v1.1.2
+
+# Метод B: Backup restore
+Expand-Archive -Path backups\cot-mvp_v1.1.2_*.zip -DestinationPath restore/
+```
 
