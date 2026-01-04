@@ -11,7 +11,6 @@ from src.registry.build_registry import build_registry
 def main():
     p = argparse.ArgumentParser(description="Build contracts registry from raw snapshots")
     p.add_argument("--root", default=".", help="project root")
-    p.add_argument("--csv", action="store_true", help="also write CSV file")
     p.add_argument("--log-level", default="INFO")
     args = p.parse_args()
 
@@ -40,11 +39,10 @@ def main():
     registry.to_parquet(parquet_path, index=False)
     logger.info(f"[registry] wrote parquet: {parquet_path} (rows={len(registry)})")
     
-    # Write CSV (optional)
-    if args.csv:
-        csv_path = registry_dir / "contracts_registry.csv"
-        registry.to_csv(csv_path, index=False)
-        logger.info(f"[registry] wrote CSV: {csv_path} (rows={len(registry)})")
+    # Write CSV (required, UTF-8)
+    csv_path = registry_dir / "contracts_registry.csv"
+    registry.to_csv(csv_path, index=False, encoding="utf-8")
+    logger.info(f"[registry] wrote CSV: {csv_path} (rows={len(registry)})")
     
     # Summary logging
     logger.info(f"[registry] Registry summary:")

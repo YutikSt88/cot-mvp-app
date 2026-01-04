@@ -9,6 +9,8 @@ __pycache__/
 data/
 reports/
 *.log
+run*.log
+
 
 # editor / os
 .vscode/
