@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.ingest.manifest import load_manifest
 from src.normalize.cot_parser import parse_deacot_zip
+from src.common.contract_codes import normalize_contract_code, is_valid_contract_code
 
 
 def build_registry(manifest_path: Path, dataset: str, root: Path, logger) -> pd.DataFrame:
@@ -93,15 +94,15 @@ def build_registry(manifest_path: Path, dataset: str, root: Path, logger) -> pd.
             
             # Extract and normalize
             contract_df = pd.DataFrame({
-                "contract_code": df[col_contract_code].astype(str).str.zfill(6),
+                "contract_code": df[col_contract_code].apply(normalize_contract_code),
                 "market_and_exchange_name": df[col_market_exchange].astype(str),
                 "report_date": pd.to_datetime(df[col_report_date], errors="coerce").dt.date,
             })
             
-            # Validate contract_code length
-            invalid_length = contract_df["contract_code"].str.len() != 6
-            if invalid_length.any():
-                logger.warning(f"[registry] {zp.name}: {invalid_length.sum()} rows with contract_code len != 6")
+            # Validate contract_code format (warn only if invalid, not based on length)
+            invalid_codes = ~contract_df["contract_code"].apply(is_valid_contract_code)
+            if invalid_codes.any():
+                logger.warning(f"[registry] {zp.name}: {invalid_codes.sum()} rows with invalid contract_code format")
             
             # Remove rows with invalid report_date
             contract_df = contract_df[contract_df["report_date"].notna()].copy()
@@ -160,21 +161,21 @@ def build_registry(manifest_path: Path, dataset: str, root: Path, logger) -> pd.
     registry["market_name"] = None
     registry["exchange_name"] = None
     
-    # Ensure contract_code is string with len 6
-    registry["contract_code"] = registry["contract_code"].astype(str).str.zfill(6)
+    # Ensure contract_code is normalized (already normalized, but ensure consistency)
+    registry["contract_code"] = registry["contract_code"].apply(normalize_contract_code)
     
-    # Validate contract_code length
-    invalid_length = registry["contract_code"].str.len() != 6
-    if invalid_length.any():
-        logger.warning(f"[registry] {invalid_length.sum()} contract_codes with len != 6 after aggregation")
+    # Validate contract_code format (warn only if invalid, not based on length)
+    invalid_codes = ~registry["contract_code"].apply(is_valid_contract_code)
+    if invalid_codes.any():
+        logger.warning(f"[registry] {invalid_codes.sum()} contract_codes with invalid format after aggregation")
     
     # Sort by contract_code
     registry = registry.sort_values("contract_code").reset_index(drop=True)
     
-    # QA: check contract_code length
-    invalid_length = registry["contract_code"].str.len() != 6
-    if invalid_length.any():
-        logger.warning(f"[registry] {invalid_length.sum()} contract_codes with len != 6")
+    # QA: check contract_code validity
+    invalid_codes = ~registry["contract_code"].apply(is_valid_contract_code)
+    if invalid_codes.any():
+        logger.warning(f"[registry] {invalid_codes.sum()} contract_codes with invalid format")
     
     # QA: check date range
     invalid_dates = registry["first_seen_report_date"] > registry["last_seen_report_date"]

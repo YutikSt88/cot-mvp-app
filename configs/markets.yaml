@@ -6,9 +6,13 @@ source:
 markets:
   - market_key: "EUR"
     contract_code: "099741"
+    category: "FX"
   - market_key: "JPY"
     contract_code: "097741"
+    category: "FX"
   - market_key: "GBP"
     contract_code: "096742"
+    category: "FX"
   - market_key: "GOLD"
     contract_code: "088691"
+    category: "METALS"

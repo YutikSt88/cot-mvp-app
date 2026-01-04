@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.common.paths import ProjectPaths
 from src.common.logging import setup_logging
+from src.common.contract_codes import normalize_contract_code
 from src.normalize.cot_parser import parse_deacot_zip
 from src.normalize.qa_checks import qa_uniqueness, qa_nulls, qa_open_interest
 
@@ -27,7 +28,7 @@ def main():
     # Build contract_to_market map from config
     contract_to_market = {}
     for m in cfg["markets"]:
-        code = str(m.get("contract_code") or "").zfill(6)
+        code = normalize_contract_code(m.get("contract_code") or "")
         key = m.get("market_key") or m.get("key")
         contract_to_market[code] = key
 
@@ -60,7 +61,7 @@ def main():
 
         # --- Filter to whitelist contracts by contract market code ---
         col_contract_code = pick("CFTC Contract Market Code")
-        df["_contract_code"] = df[col_contract_code].astype(str).str.zfill(6)
+        df["_contract_code"] = df[col_contract_code].apply(normalize_contract_code)
 
         df = df[df["_contract_code"].isin(whitelist_codes)].copy()
 

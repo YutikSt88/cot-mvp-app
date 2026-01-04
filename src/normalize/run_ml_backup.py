@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.common.paths import ProjectPaths
 from src.common.logging import setup_logging
+from src.common.contract_codes import normalize_contract_code, is_valid_contract_code
 from src.ingest.manifest import load_manifest
 from src.normalize.cot_parser import parse_deacot_zip
 
@@ -25,11 +26,11 @@ def qa_all_assets_dataset(df: pd.DataFrame) -> list[str]:
     if dup_count > 0:
         errs.append(f"duplicate contract_code+report_date rows: {dup_count}")
     
-    # 2. contract_code len == 6
-    invalid_contract_codes = df["contract_code"].astype(str).str.len() != 6
+    # 2. contract_code is valid format
+    invalid_contract_codes = ~df["contract_code"].apply(is_valid_contract_code)
     invalid_count = invalid_contract_codes.sum()
     if invalid_count > 0:
-        errs.append(f"contract_code not 6 characters: {invalid_count} rows")
+        errs.append(f"invalid contract_code format: {invalid_count} rows")
     
     # 3. report_date not null
     null_dates = df["report_date"].isna().sum()
@@ -63,11 +64,11 @@ def qa_ml_dataset(df: pd.DataFrame) -> list[str]:
     if null_dates > 0:
         errs.append(f"null report_date detected: {null_dates} rows")
     
-    # 3. contract_code as string (6 characters)
-    invalid_contract_codes = df["contract_code"].astype(str).str.len() != 6
+    # 3. contract_code is valid format
+    invalid_contract_codes = ~df["contract_code"].apply(is_valid_contract_code)
     invalid_count = invalid_contract_codes.sum()
     if invalid_count > 0:
-        errs.append(f"contract_code not 6 characters: {invalid_count} rows")
+        errs.append(f"invalid contract_code format: {invalid_count} rows")
     
     return errs
 
@@ -169,7 +170,7 @@ def _build_all_assets_dataset(
             
             # Extract and normalize
             out = pd.DataFrame({
-                "contract_code": df[col_contract_code].astype(str).str.zfill(6),
+                "contract_code": df[col_contract_code].apply(normalize_contract_code),
                 "report_date": pd.to_datetime(df[col_report_date], errors="coerce").dt.date,
                 "open_interest_all": pd.to_numeric(df[col_oi], errors="coerce"),
                 "comm_long": pd.to_numeric(df[col_comm_long], errors="coerce"),
@@ -180,8 +181,8 @@ def _build_all_assets_dataset(
                 "nonrept_short": pd.to_numeric(df[col_nr_short], errors="coerce"),
             })
             
-            # Filter out rows with invalid contract_code (not exactly 6 characters after zfill)
-            out = out[out["contract_code"].str.len() == 6].copy()
+            # Filter out rows with invalid contract_code format
+            out = out[out["contract_code"].apply(is_valid_contract_code)].copy()
             
             # Calculate net positions
             out["comm_net"] = out["comm_long"] - out["comm_short"]
@@ -345,8 +346,8 @@ def main():
     # Extract ML dataset
     ml_df = canonical[ml_columns].copy()
     
-    # Ensure contract_code is string with zfill(6)
-    ml_df["contract_code"] = ml_df["contract_code"].astype(str).str.zfill(6)
+    # Ensure contract_code is normalized
+    ml_df["contract_code"] = ml_df["contract_code"].apply(normalize_contract_code)
     
     # Ensure report_date is date type
     ml_df["report_date"] = pd.to_datetime(ml_df["report_date"]).dt.date

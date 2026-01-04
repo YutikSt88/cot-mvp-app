@@ -426,15 +426,21 @@ source:
 markets:
   - market_key: "EUR"
     contract_code: "099741"
+    category: "FX"
   - market_key: "JPY"
     contract_code: "097741"
+    category: "FX"
   - market_key: "GBP"
     contract_code: "096742"
+    category: "FX"
   - market_key: "GOLD"
     contract_code: "088691"
+    category: "METALS"
 ```
 
-**Важливо:** Новий ринок додається через contract_code (не через назву ринку).
+**Важливо:** Новий ринок додається через contract_code (не через назву ринку). Поле `category` використовується для групування та візуалізації в звітах.
+
+**Contract codes:** Підтримуються коди змінної довжини (1-20 символів), включаючи букви та символ '+' (наприклад, `06765A`, `12460+`). Коди нормалізуються автоматично (uppercase, видалення trailing `.0`).
 
 ---
 
