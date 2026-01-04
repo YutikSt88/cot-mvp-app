@@ -75,7 +75,8 @@
    - Показує статус сигналів для кожного ринку
 
 5. **ML BACKUP** (`src/normalize/run_ml_backup.py`)
-   - Створює очищений датасет для ML
+   - Створює очищений датасет для ML з canonical (за замовчуванням)
+   - Режим `--all-assets`: створює повний датасет всіх контрактів з raw snapshots
    - Виключає технічні колонки (raw_source_*)
 
 6. **REGISTRY** (`src/registry/`)
@@ -106,9 +107,11 @@ cot-mvp/
 │   │   ├── indicators_weekly.parquet
 │   │   └── signal_status.parquet
 │   │
-│   ├── ml/                       # ML-ready датасет
+│   ├── ml/                       # ML-ready датасети
 │   │   ├── cot_weekly_ml.parquet
-│   │   └── cot_weekly_ml.csv
+│   │   ├── cot_weekly_ml.csv
+│   │   ├── cot_weekly_all_assets.parquet
+│   │   └── cot_weekly_all_assets.csv
 │   │
 │   └── registry/                 # Реєстр контрактів
 │       ├── contracts_registry.parquet
@@ -312,6 +315,10 @@ cot-mvp/
 
 **Призначення:** Створення очищеного датасету для ML
 
+**Режими роботи:**
+
+#### Режим 1: Canonical ML Backup (за замовчуванням)
+
 **Вхідні дані:**
 - `data/canonical/cot_weekly_canonical.parquet`
 
@@ -324,6 +331,42 @@ cot-mvp/
 **Вихідні дані:**
 - `data/ml/cot_weekly_ml.parquet`
 - `data/ml/cot_weekly_ml.csv` (якщо `--csv`)
+
+#### Режим 2: All-Assets Backup (`--all-assets`)
+
+**Вхідні дані:**
+- ZIP-файли з `data/raw/manifest.csv` (тільки статус OK, latest per year)
+- `data/registry/contracts_registry.parquet`
+
+**Процес:**
+1. Обирає latest OK snapshot per year з manifest
+2. Парсить `annual.txt` з ZIP-архівів
+3. Витягує всі контракти (без фільтрації по whitelist)
+4. Додає колонки: contract_code, report_date, open_interest_all, позиції (comm/noncomm/nonrept)
+5. Розраховує net позиції (comm_net, noncomm_net, nonrept_net)
+6. Join з registry для market_and_exchange_name та sector
+7. Виконує QA перевірки
+8. Зберігає у parquet (обов'язково) та CSV (опційно)
+
+**Вихідні дані:**
+- `data/ml/cot_weekly_all_assets.parquet`
+- `data/ml/cot_weekly_all_assets.csv` (якщо `--csv`)
+
+**Схема all-assets:**
+- `contract_code` (str, len=6) - CFTC Contract Market Code
+- `report_date` (date) - Дата звіту
+- `open_interest_all` (numeric) - Загальний open interest
+- `comm_long`, `comm_short`, `comm_net` (numeric) - Commercial позиції
+- `noncomm_long`, `noncomm_short`, `noncomm_net` (numeric) - Non-Commercial позиції
+- `nonrept_long`, `nonrept_short`, `nonrept_net` (numeric) - Nonreportable позиції
+- `market_and_exchange_name` (str) - З registry
+- `sector` (str) - З registry (за замовчуванням "UNKNOWN")
+
+**QA для all-assets:**
+- Unique (contract_code, report_date)
+- contract_code len == 6
+- report_date not null
+- open_interest_all >= 0
 
 **Ключові файли:**
 - `run_ml_backup.py` - головна логіка
@@ -412,8 +455,11 @@ python -m src.indicators.run_indicators
 # 4. Генерація звіту
 python -m src.report.run_report
 
-# 5. (Опційно) ML backup
+# 5. (Опційно) ML backup (з canonical)
 python -m src.normalize.run_ml_backup --csv
+
+# 5a. (Опційно) All-assets backup (всі контракти з raw)
+python -m src.normalize.run_ml_backup --all-assets --csv
 
 # 6. (Опційно) Registry - реєстр всіх контрактів
 python -m src.registry.run_registry --csv
@@ -433,7 +479,11 @@ python -m src.normalize.run_normalize --root . --log-level INFO
 
 **ML Backup:**
 ```bash
-python -m src.normalize.run_ml_backup --csv  # Додає CSV файл
+# Canonical ML backup (за замовчуванням)
+python -m src.normalize.run_ml_backup --csv
+
+# All-assets backup (всі контракти з raw snapshots)
+python -m src.normalize.run_ml_backup --all-assets --csv
 ```
 
 **Registry:**
@@ -506,11 +556,18 @@ python -m src.registry.run_registry --csv  # Додає CSV файл
 
 ### ML Backup QA
 
+**Canonical ML Backup:**
 Перевірки в `run_ml_backup.py`:
-
 1. **Uniqueness:** (market_key, report_date) без дублів
 2. **report_date:** not null
 3. **contract_code:** string, 6 символів
+
+**All-Assets Backup:**
+Перевірки в `run_ml_backup.py`:
+1. **Uniqueness:** (contract_code, report_date) без дублів
+2. **contract_code:** len == 6
+3. **report_date:** not null
+4. **open_interest_all:** >= 0
 
 ---
 
@@ -551,7 +608,7 @@ pip install -r requirements.txt
 - ✅ Normalize: Працює, з QA перевірками
 - ✅ Indicators: Працює, генерація сигналів ACTIVE/PAUSE
 - ✅ Report: Працює, HTML звіти з графіками
-- ✅ ML Backup: Працює, очищений датасет
+- ✅ ML Backup: Працює, очищений датасет (canonical + all-assets)
 - ✅ Registry: Працює, реєстр контрактів
 
 **Дані:**
@@ -581,6 +638,123 @@ Ingest автоматично оновлює дані для поточного 
 
 ---
 
+## 🔄 Ops / Weekly Automation
+
+### Скрипт запуску
+
+Для автоматизації щотижневого запуску pipeline:
+
+**Розташування:** `scripts/run_weekly.ps1` (якщо створено)
+
+**Приклад скрипта:**
+```powershell
+# scripts/run_weekly.ps1
+python -m src.ingest.run_ingest --log-level INFO
+python -m src.normalize.run_normalize --root . --log-level INFO
+python -m src.indicators.run_indicators --log-level INFO
+python -m src.report.run_report --log-level INFO
+```
+
+### Windows: Weekly Automation
+
+**Скрипт запуску:** `scripts/run_weekly.ps1`
+
+**Розклад:** Субота, 08:00 (локальний час)
+
+**Детальна інструкція:** Див. [`docs/ops_task_scheduler_windows.md`](docs/ops_task_scheduler_windows.md) для покрокового налаштування Windows Task Scheduler.
+
+### Логування
+
+**Де дивитись логи:**
+- Логи виводяться в консоль (stdout/stderr) з форматом: `%(asctime)s | %(levelname)s | %(name)s | %(message)s`
+- Для перенаправлення в файл додайте до команди: `2>&1 | Tee-Object -FilePath "logs\run_$(Get-Date -Format 'yyyyMMdd').log"`
+
+**Файли логів:**
+- Типові логи: `*.log`, `run*.log` (додаються до `.gitignore`)
+- Рекомендація: зберігати логи в `logs/` або перенаправляти в централізовану систему логування
+
+---
+
+## 📋 Contract Registry Enrichment
+
+### Що таке Registry
+
+`data/registry/contracts_registry.parquet` — це реєстр всіх контрактів, які зустрічаються в COT даних.
+
+**Схема:**
+- `contract_code` (str, len=6) - CFTC Contract Market Code
+- `market_and_exchange_name` (str) - Raw name з annual.txt
+- `first_seen_report_date` (date) - Перша поява контракту
+- `last_seen_report_date` (date) - Остання поява контракту
+- `sector` (str) - Сектор (за замовчуванням "UNKNOWN")
+- `market_name` (nullable) - Парсене назва ринку (optional)
+- `exchange_name` (nullable) - Парсене назва біржі (optional)
+
+### Обогачення Registry
+
+**Автоматичне (auto-parse):**
+- Registry автоматично будується з raw snapshots через `python -m src.registry.run_registry`
+- Витягує `market_and_exchange_name` з annual.txt
+- Агрегує по contract_code (first_seen, last_seen, latest name)
+
+**Ручне обогачення (manual overrides):**
+- Для додавання `sector`, `market_name`, `exchange_name` використовуйте таблицю відповідностей
+- Розташування: `configs/contracts_enrichment.csv` (якщо створено)
+
+**Приклад формату `contracts_enrichment.csv`:**
+```csv
+contract_code,sector,market_name,exchange_name
+088691,PRECIOUS_METALS,GOLD,COMEX
+099741,FX,EUR,CME
+097741,FX,JPY,CME
+096742,FX,GBP,CME
+```
+
+**Процес обогачення:**
+1. Створіть/оновіть `configs/contracts_enrichment.csv`
+2. Запустіть registry builder (він автоматично застосує overrides, якщо реалізовано)
+3. Перевірте результат: `data/registry/contracts_registry.parquet`
+
+---
+
+## 🧹 Clean Repo Rules
+
+### Що видаляємо локально (без жалю)
+
+**Файли/папки для `.gitignore`:**
+- `*.log`, `run*.log` - логи виконання
+- `data/` - всі дані (raw, canonical, indicators, ml, registry)
+- `reports/` - HTML звіти
+- `diff_*.txt` - тимчасові diff файли
+- `.venv/`, `__pycache__/`, `*.pyc` - Python артефакти
+- `.vscode/`, `.DS_Store`, `Thumbs.db` - редактор/OS файли
+
+**Команда для очищення:**
+```powershell
+# Видалити всі тимчасові файли
+Remove-Item -Recurse -Force data/, reports/, *.log, diff_*.txt
+```
+
+### Що комітимо в Git
+
+**Обов'язково комітимо:**
+- `src/` - весь вихідний код
+- `configs/` - конфігураційні файли (markets.yaml, contracts_enrichment.csv)
+- `docs/` - документація
+- `README.md` - цей файл
+- `requirements.txt` - Python залежності
+- `.gitignore` - правила ігнорування
+
+**Не комітимо:**
+- `data/` - дані генеруються pipeline
+- `reports/` - звіти генеруються pipeline
+- `*.log` - логи
+- `.venv/`, `__pycache__/` - Python артефакти
+
+**Правило:** Якщо файл генерується pipeline — він НЕ повинен бути в Git.
+
+---
+
 ## 🤝 Контрибуція
 
 При додаванні нових ринків:
@@ -590,6 +764,6 @@ Ingest автоматично оновлює дані для поточного 
 
 ---
 
-**Версія документації:** 1.0  
-**Останнє оновлення:** 2025-12-31
+**Версія документації:** 1.1  
+**Останнє оновлення:** 2026-01-03
 
