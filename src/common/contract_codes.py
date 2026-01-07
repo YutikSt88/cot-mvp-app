@@ -43,3 +43,10 @@ def is_valid_contract_code(code: str) -> bool:
     pattern = r"^[A-Z0-9+]{1,20}$"
     return bool(re.match(pattern, code))
 
+
+
+
+
+
+
+

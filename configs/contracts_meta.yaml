@@ -1,0 +1,196 @@
+version: 1
+description: "Manual human-readable metadata for CFTC contracts"
+
+contracts:
+
+  - contract_code: "099741"
+    symbol: "EUR"
+    name: "Euro FX"
+    category: "FX"
+    enabled: true
+
+  - contract_code: "097741"
+    symbol: "JPY"
+    name: "Japanese Yen"
+    category: "FX"
+    enabled: false
+
+  - contract_code: "098662"
+    symbol: "USD"
+    name: "US Dollar Index"
+    category: "FX"
+    enabled: true
+
+  - contract_code: "096742"
+    symbol: "GBP"
+    name: "British Pound"
+    category: "FX"
+    enabled: true
+
+  - contract_code: "092741"
+    symbol: "CHF"
+    name: "Swiss Franc"
+    category: "FX"
+    enabled: true
+
+  - contract_code: "090741"
+    symbol: "CAD"
+    name: "Canadian Dollar"
+    category: "FX"
+    enabled: true
+
+  - contract_code: "232741"
+    symbol: "AUD"
+    name: "Australian Dollar"
+    category: "FX"
+    enabled: true
+
+  - contract_code: "112741"
+    symbol: "NZD"
+    name: "New Zealand Dollar"
+    category: "FX"
+    enabled: true
+
+  - contract_code: "088691"
+    symbol: "XAU"
+    name: "Gold (COMEX)"
+    category: "METALS"
+    enabled: true
+
+  - contract_code: "084691"
+    symbol: "XAG"
+    name: "Silver (COMEX)"
+    category: "METALS"
+    enabled: true
+
+  - contract_code: "085692"
+    symbol: "COPPER"
+    name: "Copper (COMEX)"
+    category: "METALS"
+    enabled: false
+
+  - contract_code: "076651"
+    symbol: "PLAT"
+    name: "Platinum"
+    category: "METALS"
+    enabled: false
+
+  - contract_code: "075651"
+    symbol: "PALL"
+    name: "Palladium"
+    category: "METALS"
+    enabled: false
+
+  - contract_code: "13874A"
+    symbol: "US500"
+    name: "S&P 500 (E-mini)"
+    category: "EQUITY_INDEX"
+    enabled: true
+
+  - contract_code: "209742"
+    symbol: "US100"
+    name: "Nasdaq 100 (E-mini)"
+    category: "EQUITY_INDEX"
+    enabled: true
+
+  - contract_code: "12460+"
+    symbol: "US30"
+    name: "Dow Jones (Mini)"
+    category: "EQUITY_INDEX"
+    enabled: true
+
+  - contract_code: "239742"
+    symbol: "US2000"
+    name: "Russell 2000"
+    category: "EQUITY_INDEX"
+    enabled: true
+
+  - contract_code: "133741"
+    symbol: "BTC"
+    name: "Bitcoin (CME)"
+    category: "CRYPTO"
+    enabled: false
+
+  - contract_code: "146021"
+    symbol: "ETH"
+    name: "Ether (CME)"
+    category: "CRYPTO"
+    enabled: false
+
+  - contract_code: "083731"
+    symbol: "COFFEE"
+    name: "Coffee"
+    category: "AGRICULTURE"
+    enabled: false
+
+  - contract_code: "073732"
+    symbol: "COCOA"
+    name: "Cocoa"
+    category: "AGRICULTURE"
+    enabled: false
+
+  - contract_code: "002602"
+    symbol: "CORN"
+    name: "Corn"
+    category: "AGRICULTURE"
+    enabled: false
+
+  - contract_code: "005602"
+    symbol: "SOY"
+    name: "Soybeans"
+    category: "AGRICULTURE"
+    enabled: false
+
+  - contract_code: "001602"
+    symbol: "WHEAT"
+    name: "Wheat (Chicago SRW)"
+    category: "AGRICULTURE"
+    enabled: false
+
+  - contract_code: "067651"
+    symbol: "WTI"
+    name: "Crude Oil WTI"
+    category: "ENERGY"
+    enabled: false
+
+  - contract_code: "06765A"
+    symbol: "BRENT"
+    name: "Brent Crude Oil"
+    category: "ENERGY"
+    enabled: false
+
+  - contract_code: "023651"
+    symbol: "NATGAS"
+    name: "Natural Gas"
+    category: "ENERGY"
+    enabled: false
+
+  - contract_code: "022651"
+    symbol: "HEATOIL"
+    name: "Heating Oil"
+    category: "ENERGY"
+    enabled: false
+
+  - contract_code: "043602"
+    symbol: "US10Y"
+    name: "10Y Treasury Note"
+    category: "RATES"
+    enabled: false
+
+  - contract_code: "042601"
+    symbol: "US2Y"
+    name: "2Y Treasury Note"
+    category: "RATES"
+    enabled: false
+
+  - contract_code: "020601"
+    symbol: "US30Y"
+    name: "30Y Treasury Note"
+    category: "RATES"
+    enabled: false
+
+  - contract_code: "134741"
+    symbol: "SOFR"
+    name: "SOFR (new benchmark)"
+    category: "RATES"
+    enabled: false

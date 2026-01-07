@@ -8,9 +8,39 @@ import pandas as pd
 
 from src.common.paths import ProjectPaths
 from src.common.logging import setup_logging
-from src.common.contract_codes import normalize_contract_code
 from src.normalize.cot_parser import parse_deacot_zip
 from src.normalize.qa_checks import qa_uniqueness, qa_nulls, qa_open_interest
+
+
+def _normalize_market_filter(df: pd.DataFrame, cfg_market: dict) -> pd.DataFrame:
+    # Legacy files typically contain "Market and Exchange Names"
+    name_col_candidates = [c for c in df.columns if "Market" in c and "Name" in c]
+    if not name_col_candidates:
+        raise ValueError("Cannot find market name column in legacy file.")
+    name_col = name_col_candidates[0]
+
+    market_name = df[name_col].astype(str)
+
+    # crude split into name/exchange if " - " exists
+    parts = market_name.str.split(" - ", n=1, expand=True)
+    mkt = parts[0].str.upper()
+    ex = parts[1].fillna("").str.upper()
+
+    any_of = [s.upper() for s in cfg_market["match"]["any_of"]]
+    ex_any = [s.upper() for s in cfg_market["match"]["exchange_any_of"]]
+
+    cond_name = False
+    for s in any_of:
+        cond_name = cond_name | mkt.str.contains(s, na=False)
+
+    cond_ex = False
+    for s in ex_any:
+        cond_ex = cond_ex | ex.str.contains(s, na=False)
+
+    out = df[cond_name & cond_ex].copy()
+    out["_market_name"] = mkt[cond_name & cond_ex]
+    out["_exchange_name"] = ex[cond_name & cond_ex]
+    return out
 
 
 def main():
@@ -25,21 +55,25 @@ def main():
     cfg = yaml.safe_load((paths.configs / "markets.yaml").read_text(encoding="utf-8"))
     dataset = cfg["source"]["dataset"]
 
-    # Build contract_to_market map from config
-    contract_to_market = {}
-    for m in cfg["markets"]:
-        code = normalize_contract_code(m.get("contract_code") or "")
-        key = m.get("market_key") or m.get("key")
-        contract_to_market[code] = key
-
-    whitelist_codes = set(contract_to_market.keys())
-
     raw_dir = paths.raw / dataset
     zips = sorted(raw_dir.glob("deacot*.zip"))
     if not zips:
         raise SystemExit(f"No raw zips found in {raw_dir}")
 
     frames = []
+
+    # MVP: keep only target contracts (prevents cross-rate markets creating duplicates)
+    # Verified from your deacot2023.zip annual.txt output:
+    # EUR: 099741 (EURO FX - CME)
+    # JPY: 097741 (JAPANESE YEN - CME)
+    # GBP: 096742 (BRITISH POUND - CME)
+    # GOLD: 088691 (GOLD - COMEX)
+    KEEP_CONTRACT_CODES = {
+        "EUR": "099741",
+        "JPY": "097741",
+        "GBP": "096742",
+        "GOLD": "088691",
+    }
 
     for zp in zips:
         year = int(zp.stem.replace("deacot", ""))
@@ -53,43 +87,57 @@ def main():
                 raise ValueError(f"Missing column contains='{col_contains}' in {zp.name}")
             return cands[0]
 
-        # --- Report date column ---
+        # --- Report date column (different legacy variants) ---
         if any("As of Date in Form YYYY-MM-DD" in c for c in df.columns):
             col_report_date = pick("As of Date in Form YYYY-MM-DD")
+        elif any("Report Date" in c for c in df.columns):
+            col_report_date = pick("Report Date")
         else:
-            col_report_date = pick("As of Date in Form YYYYMMDD")
+            # fallback (exists in your annual.txt)
+            col_report_date = pick("As of Date in Form YYMMDD")
 
-        # --- Filter to whitelist contracts by contract market code ---
+        # --- Filter to our 4 target contracts by contract market code ---
         col_contract_code = pick("CFTC Contract Market Code")
-        df["_contract_code"] = df[col_contract_code].apply(normalize_contract_code)
+        df[col_contract_code] = df[col_contract_code].astype(str).str.zfill(6)
 
-        df = df[df["_contract_code"].isin(whitelist_codes)].copy()
+        allowed = set(KEEP_CONTRACT_CODES.values())
+        df = df[df[col_contract_code].isin(allowed)].copy()
 
+        # If after filter nothing left -> skip this zip (should not happen normally)
         if df.empty:
             logger.warning(f"[normalize] {zp.name}: no rows after contract-code filter")
             continue
 
-        df["market_key"] = df["_contract_code"].map(contract_to_market)
+        # Other required columns
+        col_oi = pick("Open Interest")
+        col_nc_long = pick("Noncommercial Positions-Long")
+        col_nc_short = pick("Noncommercial Positions-Short")
+        col_nc_sprd = [c for c in df.columns if "Noncommercial" in c and "Spreading" in c]
+        col_nc_sprd = col_nc_sprd[0] if col_nc_sprd else None
 
         # Parse report_date to date
-        df["report_date"] = pd.to_datetime(df[col_report_date], errors="coerce").dt.date
+        df[col_report_date] = pd.to_datetime(df[col_report_date]).dt.date
 
-        # Build canonical DataFrame (minimal columns)
-        col_oi = pick("Open Interest (All)")
-        col_nc_long = pick("Noncommercial Positions-Long (All)")
-        col_nc_short = pick("Noncommercial Positions-Short (All)")
+        # Filter + map for each market in config (now df already contains only the 4 target contracts)
+        for m in cfg["markets"]:
+            sub = _normalize_market_filter(df, m)
+            if sub.empty:
+                continue
 
-        out = pd.DataFrame({
-            "market_key": df["market_key"],
-            "report_date": df["report_date"],
-            "open_interest_all": pd.to_numeric(df[col_oi], errors="coerce"),
-            "nc_long": pd.to_numeric(df[col_nc_long], errors="coerce"),
-            "nc_short": pd.to_numeric(df[col_nc_short], errors="coerce"),
-            "raw_source_year": year,
-            "raw_source_file": parsed.source_file,
-        })
-        out["nc_net"] = out["nc_long"] - out["nc_short"]
-        frames.append(out)
+            out = pd.DataFrame({
+                "market_key": m["key"],
+                "market_name": sub["_market_name"].astype(str),
+                "exchange_name": sub["_exchange_name"].astype(str),
+                "report_date": sub[col_report_date],
+                "open_interest_all": pd.to_numeric(sub[col_oi], errors="coerce"),
+                "nc_long": pd.to_numeric(sub[col_nc_long], errors="coerce"),
+                "nc_short": pd.to_numeric(sub[col_nc_short], errors="coerce"),
+                "nc_spreading": pd.to_numeric(sub[col_nc_sprd], errors="coerce") if col_nc_sprd else 0.0,
+                "raw_source_year": year,
+                "raw_source_file": parsed.source_file,
+            })
+            out["nc_net"] = out["nc_long"] - out["nc_short"]
+            frames.append(out)
 
     if not frames:
         raise SystemExit("No rows produced during normalization (frames empty). Check raw files & filters.")

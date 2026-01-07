@@ -20,6 +20,18 @@
 
 ---
 
+## 🔒 MVP Business Rules (Frozen)
+
+- **Data source:** Legacy COT only
+- **Trader groups:**
+  - Non-Commercial = Funds / Large Specs
+  - No Asset Manager / Leveraged Funds split
+- **Net positioning metrics:** ENABLED
+- **Compute is source of truth;** UI is render-only
+- **Flow Quality / Rebalance metrics:** experimental (UX may change)
+
+---
+
 ## 🏗 Архітектура Pipeline
 
 Проект реалізує чіткий ETL pipeline з 5 основними етапами:
@@ -29,7 +41,7 @@
 │   INGEST    │ --> │  NORMALIZE   │ --> │   COMPUTE    │
 │             │     │              │     │              │
 │ Завантаження│     │ Нормалізація │     │ Metrics      │
-│ ZIP з CFTC  │     │ + QA         │     │ (skeleton)   │
+│ ZIP з CFTC  │     │ + QA         │     │ (реалізовано)│
 └─────────────┘     └──────────────┘     └──────────────┘
       │                     │
       │                     │
@@ -68,7 +80,14 @@
 3. **COMPUTE** (`src/compute/`)
    - Читає canonical dataset
    - Фільтрує по whitelist markets
-   - Створює metrics dataset (skeleton, identity columns only)
+   - Створює metrics dataset з повним набором метрик:
+     - Net positioning metrics (nc_net, comm_net, spec_vs_hedge_net)
+     - Weekly change metrics (*_chg_1w)
+     - Flip detection flags (*_flip_1w)
+     - Net side & alignment tracking
+     - Magnitude gap з 5Y normalization
+     - Rebalance decomposition (gross/net_abs/rebalance/share)
+     - Positioning metrics (ALL Time та Last 5 Years min/max/pos)
 
 4. **ML BACKUP** (`src/normalize/run_ml_backup.py`)
    - Створює очищений датасет для ML з canonical (за замовчуванням)
@@ -100,7 +119,7 @@ cot-mvp/
 │   │   ├── cot_weekly_canonical_full.parquet
 │   │   └── qa_report.txt
 │   │
-│   ├── compute/                  # Metrics dataset (skeleton)
+│   ├── compute/                  # Metrics dataset (реалізовано)
 │   │   └── metrics_weekly.parquet
 │   │
 │   ├── ml/                       # ML-ready датасети
@@ -132,9 +151,9 @@ cot-mvp/
 │   │   ├── canonical_schema.py  # (legacy schema reference)
 │   │   └── canonical_full_schema.py
 │   │
-│   ├── compute/                  # Модуль обчислень (skeleton)
+│   ├── compute/                  # Модуль обчислень (реалізовано)
 │   │   ├── run_compute.py       # Головний runner
-│   │   ├── build_metrics.py     # Побудова metrics
+│   │   ├── build_metrics.py     # Побудова metrics (net/flip/magnitude/rebalance)
 │   │   └── validations.py       # Валідації
 │   │
 │   └── registry/                 # Модуль реєстру контрактів
@@ -432,7 +451,7 @@ python -m src.ingest.run_ingest
 # 2. Нормалізація
 python -m src.normalize.run_normalize
 
-# 3. (Опційно) Compute metrics (skeleton)
+# 3. (Опційно) Compute metrics (реалізовано)
 python -m src.compute.run_compute
 
 # 4. (Опційно) ML backup (з canonical)
@@ -570,7 +589,7 @@ pip install -r requirements.txt
 **Поточний стан:**
 - ✅ Ingest: Працює, підтримує refresh window
 - ✅ Normalize: Працює, з QA перевірками (canonical + canonical_full)
-- ✅ Compute: Працює, skeleton CLI (identity columns only)
+- ✅ Compute: Працює, повний набір метрик (net/flip/magnitude/rebalance)
 - ✅ ML Backup: Працює, очищений датасет (canonical + all-assets)
 - ✅ Registry: Працює, реєстр контрактів
 - ❌ Indicators: Видалено (legacy)
@@ -755,15 +774,30 @@ Dashboard читає дані виключно з `data/compute/metrics_weekly.p
 - ❌ Немає рекомендацій
 - ✅ Тільки контекстуальна аналітика позиціонування
 
-**Функціональність:**
-- Overview: список всіх активів
-- Market: детальна інформація по активу з блоками:
-  - Asset State: heatline індикатори для NC та COMM (позиції в діапазоні min-max)
-  - Weekly Change (Δ1w): тижневі зміни позицій з візуалізацією інтенсивності
-  - Positioning Summary (Net Sides / Divergence / Magnitude): аналіз позиціонування з net sides, directional split та magnitude gap
-  - Flow Quality (This Week): аналіз якості потоку (real move vs rotation)
+**Навігація:**
+- **Market** (default landing page): placeholder для майбутнього Market Scanner (поки не реалізовано)
+- **Overview** (report page): повний звіт про активи з вкладками:
+  - **Positioning** (активна): повний звіт з усіма аналітичними блоками:
+    - Asset State: heatline індикатори для NC та COMM (позиції в діапазоні min-max)
+    - ALL Time positioning
+    - Last 5 Years (rolling)
+    - Weekly Change (Δ1w): тижневі зміни позицій з візуалізацією інтенсивності
+    - Positioning Summary (Net Sides / Divergence / Magnitude): аналіз позиціонування з net sides, directional split та magnitude gap
+    - Magnitude Gap (всередині Positioning Summary)
+    - Flow Quality (This Week): аналіз якості потоку (real move vs rotation) — **експериментальний блок** (UX може змінюватися)
+    - Last 20 weeks table (з net колонками)
+  - **OI**: placeholder (coming soon)
+  - **Charts**: placeholder (coming soon)
+- **app.py**: hidden technical entry point (автоматично перенаправляє на Market)
 
-**Версія документації:** 1.1.4  
+**Sidebar:**
+- Category selector
+- Asset selector (фільтрується по category)
+- "Go to Overview" button (показується на Market та інших сторінках, не на Overview)
+- На Overview: зміна Category/Asset одразу оновлює звіт
+- На Market: зміна Category/Asset оновлює тільки selection (без рендерингу звіту)
+
+**Версія документації:** 1.1.5  
 **Останнє оновлення:** 2026-01-06
 
 ---
@@ -822,7 +856,7 @@ Expand-Archive -Path backups\cot-mvp_v1.1.2_*.zip -DestinationPath restore/
 │   INGEST    │ --> │  NORMALIZE   │ --> │   COMPUTE    │
 │             │     │              │     │              │
 │ Завантаження│     │ Нормалізація │     │ Metrics      │
-│ ZIP з CFTC  │     │ + QA         │     │ (skeleton)   │
+│ ZIP з CFTC  │     │ + QA         │     │ (реалізовано)│
 └─────────────┘     └──────────────┘     └──────────────┘
       │                     │
       │                     │
@@ -861,7 +895,14 @@ Expand-Archive -Path backups\cot-mvp_v1.1.2_*.zip -DestinationPath restore/
 3. **COMPUTE** (`src/compute/`)
    - Читає canonical dataset
    - Фільтрує по whitelist markets
-   - Створює metrics dataset (skeleton, identity columns only)
+   - Створює metrics dataset з повним набором метрик:
+     - Net positioning metrics (nc_net, comm_net, spec_vs_hedge_net)
+     - Weekly change metrics (*_chg_1w)
+     - Flip detection flags (*_flip_1w)
+     - Net side & alignment tracking
+     - Magnitude gap з 5Y normalization
+     - Rebalance decomposition (gross/net_abs/rebalance/share)
+     - Positioning metrics (ALL Time та Last 5 Years min/max/pos)
 
 4. **ML BACKUP** (`src/normalize/run_ml_backup.py`)
    - Створює очищений датасет для ML з canonical (за замовчуванням)
@@ -893,7 +934,7 @@ cot-mvp/
 │   │   ├── cot_weekly_canonical_full.parquet
 │   │   └── qa_report.txt
 │   │
-│   ├── compute/                  # Metrics dataset (skeleton)
+│   ├── compute/                  # Metrics dataset (реалізовано)
 │   │   └── metrics_weekly.parquet
 │   │
 │   ├── ml/                       # ML-ready датасети
@@ -925,9 +966,9 @@ cot-mvp/
 │   │   ├── canonical_schema.py  # (legacy schema reference)
 │   │   └── canonical_full_schema.py
 │   │
-│   ├── compute/                  # Модуль обчислень (skeleton)
+│   ├── compute/                  # Модуль обчислень (реалізовано)
 │   │   ├── run_compute.py       # Головний runner
-│   │   ├── build_metrics.py     # Побудова metrics
+│   │   ├── build_metrics.py     # Побудова metrics (net/flip/magnitude/rebalance)
 │   │   └── validations.py       # Валідації
 │   │
 │   └── registry/                 # Модуль реєстру контрактів
@@ -1225,7 +1266,7 @@ python -m src.ingest.run_ingest
 # 2. Нормалізація
 python -m src.normalize.run_normalize
 
-# 3. (Опційно) Compute metrics (skeleton)
+# 3. (Опційно) Compute metrics (реалізовано)
 python -m src.compute.run_compute
 
 # 4. (Опційно) ML backup (з canonical)
@@ -1363,7 +1404,7 @@ pip install -r requirements.txt
 **Поточний стан:**
 - ✅ Ingest: Працює, підтримує refresh window
 - ✅ Normalize: Працює, з QA перевірками (canonical + canonical_full)
-- ✅ Compute: Працює, skeleton CLI (identity columns only)
+- ✅ Compute: Працює, повний набір метрик (net/flip/magnitude/rebalance)
 - ✅ ML Backup: Працює, очищений датасет (canonical + all-assets)
 - ✅ Registry: Працює, реєстр контрактів
 - ❌ Indicators: Видалено (legacy)
@@ -1548,15 +1589,30 @@ Dashboard читає дані виключно з `data/compute/metrics_weekly.p
 - ❌ Немає рекомендацій
 - ✅ Тільки контекстуальна аналітика позиціонування
 
-**Функціональність:**
-- Overview: список всіх активів
-- Market: детальна інформація по активу з блоками:
-  - Asset State: heatline індикатори для NC та COMM (позиції в діапазоні min-max)
-  - Weekly Change (Δ1w): тижневі зміни позицій з візуалізацією інтенсивності
-  - Positioning Summary (Net Sides / Divergence / Magnitude): аналіз позиціонування з net sides, directional split та magnitude gap
-  - Flow Quality (This Week): аналіз якості потоку (real move vs rotation)
+**Навігація:**
+- **Market** (default landing page): placeholder для майбутнього Market Scanner (поки не реалізовано)
+- **Overview** (report page): повний звіт про активи з вкладками:
+  - **Positioning** (активна): повний звіт з усіма аналітичними блоками:
+    - Asset State: heatline індикатори для NC та COMM (позиції в діапазоні min-max)
+    - ALL Time positioning
+    - Last 5 Years (rolling)
+    - Weekly Change (Δ1w): тижневі зміни позицій з візуалізацією інтенсивності
+    - Positioning Summary (Net Sides / Divergence / Magnitude): аналіз позиціонування з net sides, directional split та magnitude gap
+    - Magnitude Gap (всередині Positioning Summary)
+    - Flow Quality (This Week): аналіз якості потоку (real move vs rotation) — **експериментальний блок** (UX може змінюватися)
+    - Last 20 weeks table (з net колонками)
+  - **OI**: placeholder (coming soon)
+  - **Charts**: placeholder (coming soon)
+- **app.py**: hidden technical entry point (автоматично перенаправляє на Market)
 
-**Версія документації:** 1.1.4  
+**Sidebar:**
+- Category selector
+- Asset selector (фільтрується по category)
+- "Go to Overview" button (показується на Market та інших сторінках, не на Overview)
+- На Overview: зміна Category/Asset одразу оновлює звіт
+- На Market: зміна Category/Asset оновлює тільки selection (без рендерингу звіту)
+
+**Версія документації:** 1.1.5  
 **Останнє оновлення:** 2026-01-06
 
 ---

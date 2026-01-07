@@ -198,6 +198,14 @@ Backup буде створено в `backups/cot-mvp_<TAG>_<TIMESTAMP>.zip`
 
 ---
 
+## Backup v1.1.5
+
+Версія v1.1.5 має git tag `v1.1.5-market-clean` та backup в `backups/backup_20260106_193622/`.
+
+Для відновлення v1.1.5:
+1. Використати Git checkout: `git checkout v1.1.5-market-clean`
+2. Або скопіювати файли з `backups/backup_20260106_193622/`
+
 ## Backup v1.1.4
 
 Версія v1.1.4 має повний backup в `backups/backup_v1.1.4_2026-01-06_1616/` з manifest файлом `BACKUP_MANIFEST.md`.

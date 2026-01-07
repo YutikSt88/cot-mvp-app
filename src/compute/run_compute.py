@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
 
 import yaml
@@ -16,6 +18,14 @@ from src.compute.validations import (
     validate_required_columns,
     validate_output_rows,
     validate_uniqueness,
+    validate_pos_all,
+    validate_pos_5y,
+    validate_max_min_all,
+    validate_max_min_5y,
+    validate_chg_1w,
+    validate_net_metrics,
+    validate_oi_metrics,
+    validate_exposure_shares,
 )
 
 
@@ -26,10 +36,14 @@ def main():
     args = parser.parse_args()
     
     logger = setup_logging(args.log_level)
+    
+    # Debug: check sys.path to detect shadowing
+    logger.info(f"[compute][debug] sys.path[0:5]={sys.path[0:5]}")
+    
     paths = ProjectPaths(Path(args.root).resolve())
     
-    # Read canonical parquet
-    canonical_path = paths.canonical / "cot_weekly_canonical.parquet"
+    # Read canonical_full parquet
+    canonical_path = paths.canonical / "cot_weekly_canonical_full.parquet"
     validate_canonical_exists(str(canonical_path))
     
     logger.info(f"[compute] reading canonical: {canonical_path}")
@@ -37,7 +51,7 @@ def main():
     logger.info(f"[compute] canonical rows: {len(canonical)}, cols: {len(canonical.columns)}")
     
     # Validate canonical has required columns
-    required_cols = ["market_key", "report_date"]
+    required_cols = ["market_key", "report_date", "contract_code", "comm_long", "comm_short", "nc_long", "nc_short"]
     col_errors = validate_required_columns(canonical, required_cols)
     if col_errors:
         for err in col_errors:
@@ -77,12 +91,41 @@ def main():
     # Check uniqueness
     errors.extend(validate_uniqueness(metrics, ["market_key", "report_date"]))
     
+    # Check pos_all (no NaN, in [0, 1])
+    errors.extend(validate_pos_all(metrics))
+    
+    # Check pos_5y (NaN allowed, non-NaN in [0, 1])
+    errors.extend(validate_pos_5y(metrics))
+    
+    # Check max != min for ALL window
+    errors.extend(validate_max_min_all(metrics))
+    
+    # Check max != min for 5Y window
+    errors.extend(validate_max_min_5y(metrics))
+    
+    # Check WoW change columns (chg_1w)
+    errors.extend(validate_chg_1w(metrics))
+    
+    # Check net metrics
+    errors.extend(validate_net_metrics(metrics))
+    
+    # Check OI metrics
+    errors.extend(validate_oi_metrics(metrics))
+    
+    # Check exposure shares
+    errors.extend(validate_exposure_shares(metrics))
+    
     if errors:
         for err in errors:
             logger.error(f"[compute] VALIDATION FAILED: {err}")
         raise SystemExit("Compute validations failed")
     
     logger.info(f"[compute] metrics rows: {len(metrics)}, cols: {len(metrics.columns)}")
+    
+    # List of added WoW change columns
+    chg_columns = ["nc_long_chg_1w", "nc_short_chg_1w", "nc_total_chg_1w",
+                   "comm_long_chg_1w", "comm_short_chg_1w", "comm_total_chg_1w"]
+    logger.info(f"[compute] added columns: {', '.join(chg_columns)}")
     
     # Write output
     output_dir = paths.data / "compute"

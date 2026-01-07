@@ -11,6 +11,8 @@ reports/
 *.log
 run*.log
 
+# backups
+backups/
 
 # editor / os
 .vscode/
