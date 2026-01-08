@@ -1,0 +1,3 @@
+"""
+COT-MVP source package.
+"""

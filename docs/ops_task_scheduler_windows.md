@@ -186,3 +186,4 @@ Pipeline також пише власні логи через Python logging. П
 
 
 
+

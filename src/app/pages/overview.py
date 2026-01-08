@@ -61,16 +61,19 @@ if market_info is None:
     st.error(f"Asset '{selected_asset}' not found in category '{selected_category}'.")
     st.stop()
 
-# Display header with asset name (left side)
-st.markdown(f"""
-<div style="
-    font-size: 2.0em;
-    font-weight: 700;
-    margin-bottom: 0.5em;
-">
-    {selected_asset}
-</div>
-""", unsafe_allow_html=True)
+# Display header with asset name (left) and week navigation (right)
+header_col1, header_col2 = st.columns([3, 1])
+
+with header_col1:
+    st.markdown(f"""
+    <div style="
+        font-size: 2.0em;
+        font-weight: 700;
+        margin-bottom: 0.5em;
+    ">
+        {selected_asset}
+    </div>
+    """, unsafe_allow_html=True)
 
 # Create tabs
 tab_pos, tab_oi, tab_charts = st.tabs(["Positioning", "OI", "Charts"])
@@ -151,14 +154,89 @@ if metrics_path.exists():
     try:
         df = pd.read_parquet(metrics_path)
         
+        # Ensure report_date is datetime/date (consistent)
+        if "report_date" in df.columns:
+            if not pd.api.types.is_datetime64_any_dtype(df["report_date"]):
+                df["report_date"] = pd.to_datetime(df["report_date"], errors="coerce")
+        
+        # Create df_sorted globally (sorted by market_key and report_date)
+        df_sorted = df.sort_values(["market_key", "report_date"]).reset_index(drop=True)
+        
         # Filter by market_key
         df_filtered = df[df["market_key"] == selected_asset].copy()
         
         if not df_filtered.empty:
-            # Get latest row for state header
-            df_sorted = df_filtered.sort_values("report_date", ascending=False).reset_index(drop=True)
-            df_latest = df_sorted.head(1)
-            row = df_latest.iloc[0]
+            # Get market_rows for selected asset (sorted ascending by report_date)
+            market_rows = df_sorted[df_sorted["market_key"] == selected_asset].sort_values("report_date").reset_index(drop=True)
+            
+            # Get available weeks for this market (sorted ascending)
+            week_dates = market_rows["report_date"].dropna().unique()
+            week_dates = sorted(week_dates)
+            
+            # Initialize session state for week navigation
+            session_key_idx = f"week_idx_{selected_asset}"
+            session_key_market = f"selected_market_key"
+            
+            # Reset week index if market changed
+            if session_key_market not in st.session_state or st.session_state[session_key_market] != selected_asset:
+                st.session_state[session_key_market] = selected_asset
+                st.session_state[session_key_idx] = len(week_dates) - 1  # Default to latest week
+            
+            # Ensure index is valid
+            current_idx = st.session_state.get(session_key_idx, len(week_dates) - 1)
+            if current_idx < 0:
+                current_idx = 0
+            if current_idx >= len(week_dates):
+                current_idx = len(week_dates) - 1
+            st.session_state[session_key_idx] = current_idx
+            
+            # Get selected week
+            selected_week = week_dates[current_idx]
+            
+            # Get selected_row for selected week (not latest)
+            selected_row = market_rows[market_rows["report_date"] == selected_week]
+            if not selected_row.empty:
+                selected_row = selected_row.iloc[0]
+            else:
+                # Fallback to latest if selected week not found
+                selected_row = market_rows.iloc[-1]
+                st.session_state[session_key_idx] = len(week_dates) - 1
+                selected_week = week_dates[-1]
+            
+            # Use selected_row as row for backward compatibility
+            row = selected_row
+            
+            # Render week navigation in header
+            with header_col2:
+                week_str = selected_week.strftime("%Y-%m-%d") if hasattr(selected_week, 'strftime') else str(selected_week)
+                
+                # Navigation buttons
+                prev_disabled = current_idx == 0
+                next_disabled = current_idx == len(week_dates) - 1
+                
+                nav_col1, nav_col2, nav_col3 = st.columns([1, 3, 1])
+                
+                with nav_col1:
+                    if st.button("◀", disabled=prev_disabled, key="week_prev", use_container_width=True):
+                        st.session_state[session_key_idx] = max(0, current_idx - 1)
+                        st.rerun()
+                
+                with nav_col2:
+                    st.markdown(f"""
+                    <div style="
+                        text-align: center;
+                        padding-top: 8px;
+                    ">
+                        <div style="font-size: 0.75em; color: #666; margin-bottom: 2px;">Week</div>
+                        <div style="font-size: 0.9em; color: #333; font-weight: 500;">{week_str}</div>
+                        <div style="font-size: 0.7em; color: #999; margin-top: 2px;">{current_idx + 1} / {len(week_dates)}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with nav_col3:
+                    if st.button("▶", disabled=next_disabled, key="week_next", use_container_width=True):
+                        st.session_state[session_key_idx] = min(len(week_dates) - 1, current_idx + 1)
+                        st.rerun()
             
             # Inject CSS for compact styling
             st.markdown("""
@@ -353,9 +431,9 @@ if metrics_path.exists():
                     
                     st.markdown(bar_html, unsafe_allow_html=True)
                 
-                # Compute scale for last 5 years per metric
-                five_years_ago = row["report_date"] - timedelta(days=5*365)
-                df_5y = df_filtered[df_filtered["report_date"] >= five_years_ago].copy()
+                # Compute scale for last 5 years per metric (up to selected_week)
+                five_years_ago = selected_week - timedelta(days=5*365) if hasattr(selected_week, '__sub__') else selected_week
+                df_5y = market_rows[(market_rows["report_date"] >= five_years_ago) & (market_rows["report_date"] <= selected_week)].copy()
                 
                 # Calculate max_pos_5y and max_neg_5y per metric (separate extremes)
                 chg_columns = {
@@ -430,9 +508,13 @@ if metrics_path.exists():
                 
                 # Get previous row for same market_key (for Diverging/Converging calculation and Δ1w)
                 prev_spec_vs_hedge = None
-                market_rows = df_sorted[df_sorted["market_key"] == selected_asset].sort_values("report_date", ascending=False)
-                if len(market_rows) > 1:
-                    prev_spec_vs_hedge = market_rows.iloc[1]["spec_vs_hedge_net"] if len(market_rows) >= 2 else None
+                # market_rows already defined above, use it
+                market_rows_sorted_desc = market_rows.sort_values("report_date", ascending=False).reset_index(drop=True)
+                selected_week_idx_in_market = market_rows_sorted_desc[market_rows_sorted_desc["report_date"] == selected_week].index
+                if len(selected_week_idx_in_market) > 0:
+                    idx_in_sorted = selected_week_idx_in_market[0]
+                    if idx_in_sorted < len(market_rows_sorted_desc) - 1:
+                        prev_spec_vs_hedge = market_rows_sorted_desc.iloc[idx_in_sorted + 1]["spec_vs_hedge_net"]
                 
                 # Calculate Δ1w if not available
                 if pd.isna(spec_vs_hedge_chg) and prev_spec_vs_hedge is not None and not pd.isna(prev_spec_vs_hedge) and not pd.isna(spec_vs_hedge):
@@ -935,12 +1017,13 @@ if metrics_path.exists():
                     "net_mag_gap",
                 ]
                 
-                # Filter to only existing columns
-                display_cols = [col for col in display_cols if col in df_sorted.columns]
-                df_display = df_sorted.head(20)[display_cols].copy()
+                # Filter to only existing columns and filter by selected_week (show last 20 weeks up to selected week)
+                display_cols = [col for col in display_cols if col in market_rows.columns]
+                market_rows_up_to_selected = market_rows[market_rows["report_date"] <= selected_week].sort_values("report_date", ascending=False)
+                df_display = market_rows_up_to_selected.head(20)[display_cols].copy()
                 st.markdown("### 📊 Дані (останні 20 тижнів)")
                 st.dataframe(df_display, use_container_width=True, hide_index=True)
-                st.caption(f"Showing last 20 rows (total: {len(df_filtered)} rows)")
+                st.caption(f"Showing last 20 rows up to {selected_week.strftime('%Y-%m-%d') if hasattr(selected_week, 'strftime') else selected_week} (total: {len(market_rows)} rows)")
                 
                 # Debug marker: report continues
                 st.caption("Positioning report: end of section ✅")
@@ -1027,9 +1110,9 @@ if metrics_path.exists():
                 oi_pos_all = row.get("open_interest_pos_all")
                 oi_pos_5y = row.get("open_interest_pos_5y")
                 
-                # Calculate min/max for ALL Time from df_filtered
-                if "open_interest" in df_filtered.columns:
-                    market_oi_data = df_filtered[df_filtered["market_key"] == row["market_key"]]["open_interest"]
+                # Calculate min/max for ALL Time from market_rows up to selected_week
+                if "open_interest" in market_rows.columns:
+                    market_oi_data = market_rows[market_rows["report_date"] <= selected_week]["open_interest"]
                     if not market_oi_data.empty:
                         oi_min_all = market_oi_data.min()
                         oi_max_all = market_oi_data.max()
@@ -1050,12 +1133,11 @@ if metrics_path.exists():
                 if pd.isna(oi_pos_5y):
                     render_heatline_bar("Open Interest", 0, 0, oi_current, None, disabled=True)
                 else:
-                    # Get 5Y rolling window data
-                    five_years_ago = row["report_date"] - timedelta(days=5*365)
-                    df_5y_oi = df_filtered[
-                        (df_filtered["market_key"] == row["market_key"]) & 
-                        (df_filtered["report_date"] >= five_years_ago) &
-                        (df_filtered["report_date"] <= row["report_date"])
+                    # Get 5Y rolling window data up to selected_week
+                    five_years_ago = selected_week - timedelta(days=5*365) if hasattr(selected_week, '__sub__') else selected_week
+                    df_5y_oi = market_rows[
+                        (market_rows["report_date"] >= five_years_ago) &
+                        (market_rows["report_date"] <= selected_week)
                     ]
                     if not df_5y_oi.empty and "open_interest" in df_5y_oi.columns:
                         oi_min_5y = df_5y_oi["open_interest"].min()
@@ -1064,6 +1146,54 @@ if metrics_path.exists():
                         oi_min_5y = oi_current
                         oi_max_5y = oi_current
                     render_heatline_bar("Open Interest", oi_min_5y, oi_max_5y, oi_current, oi_pos_5y, disabled=pd.isna(oi_pos_5y))
+                
+                # OI Change Strength (5Y)
+                # Use selected week row (row is from selected_week, not latest)
+                oi_chg_strength_pos = row.get("open_interest_chg_1w_pct_abs_pos_5y")
+                oi_chg_pct_abs = abs(oi_chg_pct) if not pd.isna(oi_chg_pct) else None
+                st.markdown('<div class="section-header">OI Change Strength (|ΔOI %|, 5Y)</div>', unsafe_allow_html=True)
+                if pd.isna(oi_chg_strength_pos):
+                    render_heatline_bar("OI Change Strength", 0, 0, 0, None, disabled=True)
+                else:
+                    # Render with min=0, max=1, current=pos (already normalized)
+                    # Create custom tooltip that shows correct value
+                    tooltip_text = f"Min: 0 | Current: {oi_chg_strength_pos:.2f} | Max: 1"
+                    tooltip_escaped = tooltip_text.replace('"', '&quot;')
+                    pos_pct = max(0.0, min(1.0, oi_chg_strength_pos)) * 100
+                    
+                    bar_html = f"""
+                    <div style="display: flex; align-items: center; margin: 3px 0;">
+                        <div style="
+                            height: 16px;
+                            width: 60%;
+                            background: linear-gradient(to right, 
+                                #4A90E2 0%, 
+                                #4A90E2 25%,
+                                #F5F5F5 50%,
+                                #F5F5F5 75%,
+                                #E74C3C 100%);
+                            border-radius: 3px;
+                            position: relative;
+                            margin-right: 10px;
+                            cursor: pointer;
+                        " title="{tooltip_escaped}">
+                            <div style="
+                                position: absolute;
+                                left: {pos_pct}%;
+                                top: 50%;
+                                transform: translate(-50%, -50%);
+                                width: 14px;
+                                height: 14px;
+                                background-color: #2C3E50;
+                                border: 2px solid white;
+                                border-radius: 50%;
+                                box-shadow: 0 2px 4px rgba(0,0,0,0.4);
+                            " title="{tooltip_escaped}"></div>
+                        </div>
+                        <span style="font-size: 0.9em; font-weight: 500;">OI Change Strength</span>
+                    </div>
+                    """
+                    st.markdown(bar_html, unsafe_allow_html=True)
                 
                 # Exposure Shares (Gross) section
                 st.markdown(f"""
@@ -1191,6 +1321,316 @@ if metrics_path.exists():
                         </div>
                         """
                         st.markdown(wow_html, unsafe_allow_html=True)
+                
+                # Block 2: Participation / Crowdedness
+                st.markdown(f"""
+                <div style="
+                    font-size: 1.1em;
+                    font-weight: 500;
+                    margin: 1.5em 0 0.5em 0;
+                ">
+                    Participation / Crowdedness
+                </div>
+                <div class="compact-divider"></div>
+                """, unsafe_allow_html=True)
+                
+                # Check if participation columns exist
+                has_participation = all(col in df_filtered.columns for col in ["funds_total_pct_oi", "comm_total_pct_oi"])
+                has_nr_participation = all(col in df_filtered.columns for col in ["nr_total_pct_oi", "nr_total_pct_oi_chg_1w_pp"])
+                
+                if has_participation:
+                    funds_total_pct = row.get("funds_total_pct_oi")
+                    comm_total_pct = row.get("comm_total_pct_oi")
+                    funds_total_pct_chg_pp = row.get("funds_total_pct_oi_chg_1w_pp")
+                    comm_total_pct_chg_pp = row.get("comm_total_pct_oi_chg_1w_pp")
+                    
+                    # Create inline metric blocks
+                    part_col1, part_col2, part_col3 = st.columns(3)
+                    
+                    with part_col1:
+                        funds_pct_display = f"{funds_total_pct*100:.1f}%" if not pd.isna(funds_total_pct) else "—"
+                        funds_chg_display = f"+{funds_total_pct_chg_pp:.1f}pp" if not pd.isna(funds_total_pct_chg_pp) and funds_total_pct_chg_pp >= 0 else f"{funds_total_pct_chg_pp:.1f}pp" if not pd.isna(funds_total_pct_chg_pp) else "—"
+                        funds_chg_color = "#27AE60" if not pd.isna(funds_total_pct_chg_pp) and funds_total_pct_chg_pp >= 0 else "#E74C3C"
+                        st.markdown(f"""
+                        <div style="
+                            padding: 16px 20px;
+                            background: #f8f9fa;
+                            border-radius: 6px;
+                            text-align: center;
+                        ">
+                            <div style="font-size: 0.85em; color: #666; margin-bottom: 6px; font-weight: 500;">Funds</div>
+                            <div style="font-size: 38px; font-weight: 700; color: #2C3E50; line-height: 1.1; margin-bottom: 8px;">{funds_pct_display}</div>
+                            <div style="font-size: 17px; color: {funds_chg_color}; margin-bottom: 4px; font-weight: 500;">WoW: {funds_chg_display}</div>
+                            <div style="font-size: 12px; color: #999; margin-top: 4px;">Share of OI (gross = long+short)</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with part_col2:
+                        comm_pct_display = f"{comm_total_pct*100:.1f}%" if not pd.isna(comm_total_pct) else "—"
+                        comm_chg_display = f"+{comm_total_pct_chg_pp:.1f}pp" if not pd.isna(comm_total_pct_chg_pp) and comm_total_pct_chg_pp >= 0 else f"{comm_total_pct_chg_pp:.1f}pp" if not pd.isna(comm_total_pct_chg_pp) else "—"
+                        comm_chg_color = "#27AE60" if not pd.isna(comm_total_pct_chg_pp) and comm_total_pct_chg_pp >= 0 else "#E74C3C"
+                        st.markdown(f"""
+                        <div style="
+                            padding: 16px 20px;
+                            background: #f8f9fa;
+                            border-radius: 6px;
+                            text-align: center;
+                        ">
+                            <div style="font-size: 0.85em; color: #666; margin-bottom: 6px; font-weight: 500;">Comm</div>
+                            <div style="font-size: 38px; font-weight: 700; color: #2C3E50; line-height: 1.1; margin-bottom: 8px;">{comm_pct_display}</div>
+                            <div style="font-size: 17px; color: {comm_chg_color}; margin-bottom: 4px; font-weight: 500;">WoW: {comm_chg_display}</div>
+                            <div style="font-size: 12px; color: #999; margin-top: 4px;">Share of OI (gross = long+short)</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with part_col3:
+                        if has_nr_participation:
+                            nr_total_pct = row.get("nr_total_pct_oi")
+                            nr_total_pct_chg_pp = row.get("nr_total_pct_oi_chg_1w_pp")
+                            nr_pct_display = f"{nr_total_pct*100:.1f}%" if not pd.isna(nr_total_pct) else "—"
+                            nr_chg_display = f"+{nr_total_pct_chg_pp:.1f}pp" if not pd.isna(nr_total_pct_chg_pp) and nr_total_pct_chg_pp >= 0 else f"{nr_total_pct_chg_pp:.1f}pp" if not pd.isna(nr_total_pct_chg_pp) else "—"
+                            nr_chg_color = "#27AE60" if not pd.isna(nr_total_pct_chg_pp) and nr_total_pct_chg_pp >= 0 else "#E74C3C"
+                            st.markdown(f"""
+                            <div style="
+                                padding: 16px 20px;
+                                background: #f8f9fa;
+                                border-radius: 6px;
+                                text-align: center;
+                            ">
+                                <div style="font-size: 0.85em; color: #666; margin-bottom: 6px; font-weight: 500;">NR</div>
+                                <div style="font-size: 38px; font-weight: 700; color: #2C3E50; line-height: 1.1; margin-bottom: 8px;">{nr_pct_display}</div>
+                                <div style="font-size: 17px; color: {nr_chg_color}; margin-bottom: 4px; font-weight: 500;">WoW: {nr_chg_display}</div>
+                                <div style="font-size: 12px; color: #999; margin-top: 4px;">Share of OI (gross = long+short)</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    
+                else:
+                    st.markdown("""
+                    <div style="
+                        padding: 12px;
+                        background: #f8f9fa;
+                        border-radius: 4px;
+                        color: #666;
+                    ">
+                        Participation data not available
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Block 3: Who Moved (Flows in %OI)
+                st.markdown(f"""
+                <div style="
+                    font-size: 1.1em;
+                    font-weight: 500;
+                    margin: 1.5em 0 0.5em 0;
+                ">
+                    Who Moved (Flows in %OI)
+                </div>
+                <div class="compact-divider"></div>
+                """, unsafe_allow_html=True)
+                
+                # Helper text
+                st.caption("Flows = weekly position change divided by last week OI.")
+                
+                # Check if flow columns exist
+                has_flows = all(col in df_filtered.columns for col in ["funds_long_flow_pct_oi", "funds_short_flow_pct_oi", "comm_long_flow_pct_oi", "comm_short_flow_pct_oi"])
+                has_nr_flows = all(col in df_filtered.columns for col in ["nr_long_flow_pct_oi", "nr_short_flow_pct_oi"])
+                
+                if has_flows:
+                    # Get flow values
+                    funds_long_flow = row.get("funds_long_flow_pct_oi")
+                    funds_short_flow = row.get("funds_short_flow_pct_oi")
+                    comm_long_flow = row.get("comm_long_flow_pct_oi")
+                    comm_short_flow = row.get("comm_short_flow_pct_oi")
+                    
+                    # NR toggle
+                    include_nr = False
+                    if has_nr_flows:
+                        include_nr = st.toggle("Include NR", value=False)
+                    
+                    # Format values consistently: +X.XX% with sign and 2 decimals
+                    funds_long_display = f"{funds_long_flow*100:+.2f}%" if not pd.isna(funds_long_flow) else "—"
+                    funds_short_display = f"{funds_short_flow*100:+.2f}%" if not pd.isna(funds_short_flow) else "—"
+                    comm_long_display = f"{comm_long_flow*100:+.2f}%" if not pd.isna(comm_long_flow) else "—"
+                    comm_short_display = f"{comm_short_flow*100:+.2f}%" if not pd.isna(comm_short_flow) else "—"
+                    
+                    funds_long_color = "#27AE60" if not pd.isna(funds_long_flow) and funds_long_flow >= 0 else "#E74C3C"
+                    funds_short_color = "#27AE60" if not pd.isna(funds_short_flow) and funds_short_flow >= 0 else "#E74C3C"
+                    comm_long_color = "#27AE60" if not pd.isna(comm_long_flow) and comm_long_flow >= 0 else "#E74C3C"
+                    comm_short_color = "#27AE60" if not pd.isna(comm_short_flow) and comm_short_flow >= 0 else "#E74C3C"
+                    
+                    # Create aligned table layout
+                    table_html = """
+                    <div style="margin: 10px 0;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 0.9em; background: #f8f9fa; border-radius: 6px; overflow: hidden;">
+                            <thead>
+                                <tr style="background: #2C3E50; color: white;">
+                                    <th style="text-align: left; padding: 12px 16px; font-weight: 600; width: 25%;">Group</th>
+                                    <th style="text-align: right; padding: 12px 16px; font-weight: 600; width: 37.5%;">Long Flow %OI</th>
+                                    <th style="text-align: right; padding: 12px 16px; font-weight: 600; width: 37.5%;">Short Flow %OI</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    """
+                    
+                    # Funds row
+                    table_html += f"""
+                                <tr style="border-bottom: 1px solid #e0e0e0;">
+                                    <td style="padding: 12px 16px; color: #3498DB; font-weight: 500;">Funds</td>
+                                    <td style="text-align: right; padding: 12px 16px; color: {funds_long_color}; font-weight: 500;">{funds_long_display}</td>
+                                    <td style="text-align: right; padding: 12px 16px; color: {funds_short_color}; font-weight: 500;">{funds_short_display}</td>
+                                </tr>
+                    """
+                    
+                    # Comm row
+                    table_html += f"""
+                                <tr style="border-bottom: 1px solid #e0e0e0;">
+                                    <td style="padding: 12px 16px; color: #E74C3C; font-weight: 500;">Comm</td>
+                                    <td style="text-align: right; padding: 12px 16px; color: {comm_long_color}; font-weight: 500;">{comm_long_display}</td>
+                                    <td style="text-align: right; padding: 12px 16px; color: {comm_short_color}; font-weight: 500;">{comm_short_display}</td>
+                                </tr>
+                    """
+                    
+                    # NR row (if enabled)
+                    if include_nr and has_nr_flows:
+                        nr_long_flow = row.get("nr_long_flow_pct_oi")
+                        nr_short_flow = row.get("nr_short_flow_pct_oi")
+                        nr_long_display = f"{nr_long_flow*100:+.2f}%" if not pd.isna(nr_long_flow) else "—"
+                        nr_short_display = f"{nr_short_flow*100:+.2f}%" if not pd.isna(nr_short_flow) else "—"
+                        nr_long_color = "#27AE60" if not pd.isna(nr_long_flow) and nr_long_flow >= 0 else "#E74C3C"
+                        nr_short_color = "#27AE60" if not pd.isna(nr_short_flow) and nr_short_flow >= 0 else "#E74C3C"
+                        table_html += f"""
+                                <tr>
+                                    <td style="padding: 12px 16px; color: #95A5A6; font-weight: 500;">NR</td>
+                                    <td style="text-align: right; padding: 12px 16px; color: {nr_long_color}; font-weight: 500;">{nr_long_display}</td>
+                                    <td style="text-align: right; padding: 12px 16px; color: {nr_short_color}; font-weight: 500;">{nr_short_display}</td>
+                                </tr>
+                        """
+                    
+                    table_html += """
+                            </tbody>
+                        </table>
+                    </div>
+                    """
+                    st.markdown(table_html, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div style="
+                        padding: 12px;
+                        background: #f8f9fa;
+                        border-radius: 4px;
+                        color: #666;
+                    ">
+                        Flow data not available
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Block 4: Trend vs Noise
+                st.markdown(f"""
+                <div style="
+                    font-size: 1.1em;
+                    font-weight: 500;
+                    margin: 1.5em 0 0.5em 0;
+                ">
+                    Trend vs Noise
+                </div>
+                <div class="compact-divider"></div>
+                """, unsafe_allow_html=True)
+                
+                # Check if trend columns exist
+                has_trend = all(col in df_filtered.columns for col in ["oi_chg_1w_pct", "open_interest_chg_4w_pct", "open_interest_chg_13w_pct"])
+                
+                if has_trend:
+                    oi_chg_1w = row.get("oi_chg_1w_pct")
+                    oi_chg_4w = row.get("open_interest_chg_4w_pct")  # Use open_interest_chg_4w_pct for consistency
+                    oi_chg_13w = row.get("open_interest_chg_13w_pct")  # Use open_interest_chg_13w_pct for consistency
+                    
+                    # Create 3 KPI cards
+                    trend_col1, trend_col2, trend_col3 = st.columns(3)
+                    
+                    with trend_col1:
+                        chg_1w_display = f"{oi_chg_1w*100:+.1f}%" if not pd.isna(oi_chg_1w) else "—"
+                        chg_1w_color = "#27AE60" if not pd.isna(oi_chg_1w) and oi_chg_1w >= 0 else "#E74C3C"
+                        st.markdown(f"""
+                        <div style="
+                            padding: 8px 12px;
+                            background: #f8f9fa;
+                            border-radius: 4px;
+                            border-left: 3px solid {chg_1w_color};
+                        ">
+                            <div style="font-size: 0.75em; color: #666; margin-bottom: 2px;">1w</div>
+                            <div style="font-size: 1.1em; font-weight: 600; color: {chg_1w_color};">{chg_1w_display}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with trend_col2:
+                        chg_4w_display = f"{oi_chg_4w*100:+.1f}%" if not pd.isna(oi_chg_4w) else "—"
+                        chg_4w_color = "#27AE60" if not pd.isna(oi_chg_4w) and oi_chg_4w >= 0 else "#E74C3C"
+                        st.markdown(f"""
+                        <div style="
+                            padding: 8px 12px;
+                            background: #f8f9fa;
+                            border-radius: 4px;
+                            border-left: 3px solid {chg_4w_color};
+                        ">
+                            <div style="font-size: 0.75em; color: #666; margin-bottom: 2px;">4w</div>
+                            <div style="font-size: 1.1em; font-weight: 600; color: {chg_4w_color};">{chg_4w_display}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    with trend_col3:
+                        chg_13w_display = f"{oi_chg_13w*100:+.1f}%" if not pd.isna(oi_chg_13w) else "—"
+                        chg_13w_color = "#27AE60" if not pd.isna(oi_chg_13w) and oi_chg_13w >= 0 else "#E74C3C"
+                        st.markdown(f"""
+                        <div style="
+                            padding: 8px 12px;
+                            background: #f8f9fa;
+                            border-radius: 4px;
+                            border-left: 3px solid {chg_13w_color};
+                        ">
+                            <div style="font-size: 0.75em; color: #666; margin-bottom: 2px;">13w</div>
+                            <div style="font-size: 1.1em; font-weight: 600; color: {chg_13w_color};">{chg_13w_display}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                    
+                    # Trend label: check if 1w, 4w, 13w all have same sign
+                    if not pd.isna(oi_chg_1w) and not pd.isna(oi_chg_4w) and not pd.isna(oi_chg_13w):
+                        sign_1w = 1 if oi_chg_1w >= 0 else -1
+                        sign_4w = 1 if oi_chg_4w >= 0 else -1
+                        sign_13w = 1 if oi_chg_13w >= 0 else -1
+                        abs_13w = abs(oi_chg_13w)
+                        
+                        # All three have same sign
+                        if sign_1w == sign_4w == sign_13w:
+                            trend_label = "Trend"
+                            trend_color = "#27AE60" if sign_13w > 0 else "#E74C3C"
+                        elif abs_13w < 0.01:
+                            trend_label = "Flat"
+                            trend_color = "#95A5A6"
+                        else:
+                            trend_label = "Noise / Mixed"
+                            trend_color = "#F39C12"
+                        
+                        st.markdown(f"""
+                        <div style="
+                            margin-top: 8px;
+                            font-size: 0.85em;
+                            color: {trend_color};
+                            font-weight: 500;
+                        ">
+                            {trend_label}
+                        </div>
+                        """, unsafe_allow_html=True)
+                else:
+                    st.markdown("""
+                    <div style="
+                        padding: 12px;
+                        background: #f8f9fa;
+                        border-radius: 4px;
+                        color: #666;
+                    ">
+                        Trend data not available
+                    </div>
+                    """, unsafe_allow_html=True)
             
             # Charts tab placeholder
             with tab_charts:

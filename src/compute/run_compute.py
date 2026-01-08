@@ -26,6 +26,7 @@ from src.compute.validations import (
     validate_net_metrics,
     validate_oi_metrics,
     validate_exposure_shares,
+    validate_oi_v1_metrics,
 )
 
 
@@ -114,6 +115,9 @@ def main():
     
     # Check exposure shares
     errors.extend(validate_exposure_shares(metrics))
+    
+    # Check OI v1 metrics
+    errors.extend(validate_oi_v1_metrics(metrics))
     
     if errors:
         for err in errors:

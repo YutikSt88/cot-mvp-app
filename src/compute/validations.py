@@ -59,6 +59,10 @@ def validate_pos_all(df: pd.DataFrame) -> list[str]:
     """
     errors = []
     groups = ["nc", "comm"]
+    # Check if NR columns exist
+    has_nr = any("nr_" in col and "_pos_all" in col for col in df.columns)
+    if has_nr:
+        groups.append("nr")
     sides = ["long", "short", "total"]
     
     for group in groups:
@@ -95,6 +99,10 @@ def validate_pos_5y(df: pd.DataFrame) -> list[str]:
     """
     errors = []
     groups = ["nc", "comm"]
+    # Check if NR columns exist
+    has_nr = any("nr_" in col and "_pos_5y" in col for col in df.columns)
+    if has_nr:
+        groups.append("nr")
     sides = ["long", "short", "total"]
     
     for group in groups:
@@ -122,6 +130,10 @@ def validate_max_min_all(df: pd.DataFrame) -> list[str]:
     """
     errors = []
     groups = ["nc", "comm"]
+    # Check if NR columns exist
+    has_nr = any("nr_" in col and ("_min_all" in col or "_max_all" in col) for col in df.columns)
+    if has_nr:
+        groups.append("nr")
     sides = ["long", "short", "total"]
     
     for group in groups:
@@ -152,6 +164,10 @@ def validate_max_min_5y(df: pd.DataFrame) -> list[str]:
     """
     errors = []
     groups = ["nc", "comm"]
+    # Check if NR columns exist
+    has_nr = any("nr_" in col and ("_min_5y" in col or "_max_5y" in col) for col in df.columns)
+    if has_nr:
+        groups.append("nr")
     sides = ["long", "short", "total"]
     
     for group in groups:
@@ -188,6 +204,10 @@ def validate_chg_1w(df: pd.DataFrame) -> list[str]:
     """
     errors = []
     groups = ["nc", "comm"]
+    # Check if NR columns exist
+    has_nr = any("nr_" in col and "_chg_1w" in col for col in df.columns)
+    if has_nr:
+        groups.append("nr")
     sides = ["long", "short", "total"]
     
     # Sort by market_key and report_date for validation
@@ -295,6 +315,11 @@ def validate_net_metrics(df: pd.DataFrame) -> list[str]:
         "spec_vs_hedge_net", "spec_vs_hedge_net_chg_1w"
     ]
     
+    # Check if NR columns exist
+    has_nr = "nr_net" in df.columns and "nr_net_chg_1w" in df.columns
+    if has_nr:
+        required_cols.extend(["nr_net", "nr_net_chg_1w"])
+    
     # Check 1: All columns exist
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
@@ -341,14 +366,34 @@ def validate_net_metrics(df: pd.DataFrame) -> list[str]:
             f"(expected: spec_vs_hedge_net == nc_net - comm_net)"
         )
     
-    # Check 3: No NaN in nc_net, comm_net, spec_vs_hedge_net
+    # nr_net == nr_long - nr_short (if NR exists)
+    if has_nr:
+        if "nr_long" in df_sorted.columns and "nr_short" in df_sorted.columns:
+            expected_nr_net = df_sorted["nr_long"] - df_sorted["nr_short"]
+            diff_nr_net = np.abs(df_sorted["nr_net"] - expected_nr_net)
+            max_diff = diff_nr_net.max()
+            if max_diff > 1e-6:
+                errors.append(
+                    f"nr_net formula mismatch: max diff = {max_diff:.2e} "
+                    f"(expected: nr_net == nr_long - nr_short)"
+                )
+        else:
+            errors.append("Missing source columns for nr_net validation: nr_long, nr_short")
+    
+    # Check 3: No NaN in nc_net, comm_net, spec_vs_hedge_net (and nr_net if exists)
     for col in ["nc_net", "comm_net", "spec_vs_hedge_net"]:
         nan_count = df_sorted[col].isna().sum()
         if nan_count > 0:
             errors.append(f"{col}: found {nan_count} NaN values (not allowed)")
+    if has_nr:
+        nan_count = df_sorted["nr_net"].isna().sum()
+        if nan_count > 0:
+            errors.append(f"nr_net: found {nan_count} NaN values (not allowed)")
     
     # Check 4: *_chg_1w NaN allowed only for first row per market_key
     chg_cols = ["nc_net_chg_1w", "comm_net_chg_1w", "spec_vs_hedge_net_chg_1w"]
+    if has_nr:
+        chg_cols.append("nr_net_chg_1w")
     for col_chg in chg_cols:
         for market_key in df_sorted["market_key"].unique():
             market_mask = df_sorted["market_key"] == market_key
@@ -490,6 +535,15 @@ def validate_net_side_and_mag_gap(df: pd.DataFrame) -> list[str]:
                 f"(allowed: {sorted(valid_sides)})"
             )
     
+    # Check 6b: nr_net_side only in {"NET_LONG", "NET_SHORT", "FLAT"} (if exists)
+    if "nr_net_side" in df_sorted.columns:
+        invalid = set(df_sorted["nr_net_side"].unique()) - valid_sides
+        if invalid:
+            errors.append(
+                f"nr_net_side: invalid values found: {sorted(invalid)} "
+                f"(allowed: {sorted(valid_sides)})"
+            )
+    
     # Check 7: net_alignment only in {"SAME_SIDE", "OPPOSITE_SIDE", "UNKNOWN"}
     valid_alignments = {"SAME_SIDE", "OPPOSITE_SIDE", "UNKNOWN"}
     invalid_alignments = set(df_sorted["net_alignment"].unique()) - valid_alignments
@@ -524,6 +578,11 @@ def validate_net_flip_flags(df: pd.DataFrame) -> list[str]:
         "comm_net_flip_1w",
         "spec_vs_hedge_net_flip_1w"
     ]
+    
+    # Check if NR flip column exists
+    has_nr_flip = "nr_net_flip_1w" in df.columns
+    if has_nr_flip:
+        required_cols.append("nr_net_flip_1w")
     
     # Check 1: All columns exist
     missing_cols = [col for col in required_cols if col not in df.columns]
@@ -615,6 +674,25 @@ def validate_net_flip_flags(df: pd.DataFrame) -> list[str]:
                 f"spec_vs_hedge_net_flip_1w formula mismatch: {mismatch} rows where expected != actual"
             )
     
+    # Check nr_net_flip_1w (if exists)
+    if has_nr_flip and "nr_net" in df_sorted.columns:
+        prev_nr = df_sorted.groupby("market_key")["nr_net"].shift(1)
+        curr_nr = df_sorted["nr_net"]
+        
+        prev_sign = prev_nr.apply(sign_func)
+        curr_sign = curr_nr.apply(sign_func)
+        
+        expected_flip = (prev_sign != 0) & (curr_sign != 0) & (curr_sign != prev_sign)
+        expected_flip = expected_flip.fillna(False).astype(bool)
+        
+        actual_flip = df_sorted["nr_net_flip_1w"].fillna(False).astype(bool)
+        
+        mismatch = (expected_flip != actual_flip).sum()
+        if mismatch > 0:
+            errors.append(
+                f"nr_net_flip_1w formula mismatch: {mismatch} rows where expected != actual"
+            )
+    
     return errors
 
 
@@ -639,6 +717,11 @@ def validate_rebalance_metrics(df: pd.DataFrame) -> list[str]:
         "comm_gross_chg_1w", "comm_net_abs_chg_1w", "comm_rebalance_chg_1w", "comm_rebalance_share_1w"
     ]
     
+    # Check if NR rebalance columns exist
+    has_nr_reb = all(col in df.columns for col in ["nr_gross_chg_1w", "nr_net_abs_chg_1w", "nr_rebalance_chg_1w", "nr_rebalance_share_1w"])
+    if has_nr_reb:
+        required_cols.extend(["nr_gross_chg_1w", "nr_net_abs_chg_1w", "nr_rebalance_chg_1w", "nr_rebalance_share_1w"])
+    
     # Check 1: All columns exist
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
@@ -650,6 +733,8 @@ def validate_rebalance_metrics(df: pd.DataFrame) -> list[str]:
     
     # Check 2: No inf/-inf in new columns + net_chg_1w columns
     inf_check_cols = required_cols + ["nc_net_chg_1w", "comm_net_chg_1w"]
+    if has_nr_reb:
+        inf_check_cols.append("nr_net_chg_1w")
     for col in inf_check_cols:
         if col not in df_sorted.columns:
             continue
@@ -693,8 +778,11 @@ def validate_rebalance_metrics(df: pd.DataFrame) -> list[str]:
                     f"(expected: comm_net_chg_1w == comm_long_chg_1w - comm_short_chg_1w)"
                 )
     
-    # Check 4: Mathematical constraints (for nc and comm)
-    for prefix in ["nc", "comm"]:
+    # Check 4: Mathematical constraints (for nc, comm, and optionally nr)
+    prefixes = ["nc", "comm"]
+    if has_nr_reb:
+        prefixes.append("nr")
+    for prefix in prefixes:
         gross_col = f"{prefix}_gross_chg_1w"
         net_abs_col = f"{prefix}_net_abs_chg_1w"
         rebalance_col = f"{prefix}_rebalance_chg_1w"
@@ -1023,5 +1111,177 @@ def validate_exposure_shares(df: pd.DataFrame) -> list[str]:
             inf_count = inf_mask.sum()
             if inf_count > 0:
                 errors.append(f"nr_gross: found {inf_count} inf/-inf values (not allowed)")
+    
+    return errors
+
+
+def validate_oi_v1_metrics(df: pd.DataFrame) -> list[str]:
+    """
+    Validate OI v1 metrics (change strength, participation, flows, multi-horizon).
+    
+    Checks:
+    1) Required columns exist
+    2) pct columns are finite or NaN (no inf/-inf)
+    3) *_total_pct_oi in [0, 5.0] (soft upper bound to catch garbage, realistically <= 1.5)
+    4) open_interest_chg_1w_pct_abs_pos_5y in [0, 1] or NaN
+    5) oi_chg_4w_pct, oi_chg_13w_pct finite or NaN
+    6) WoW pp columns finite or NaN
+    7) First-row NaN allowance per market_key for WoW-based columns
+    
+    Returns list of error messages.
+    """
+    errors = []
+    
+    # Required columns (always)
+    required_cols = [
+        "open_interest_chg_1w_pct_abs_pos_5y",
+        "funds_total_pct_oi", "comm_total_pct_oi",
+        "funds_total_pct_oi_chg_1w_pp", "comm_total_pct_oi_chg_1w_pp",
+        "funds_long_flow_pct_oi", "funds_short_flow_pct_oi",
+        "comm_long_flow_pct_oi", "comm_short_flow_pct_oi",
+        "oi_chg_1w_pct", "oi_chg_4w_pct", "oi_chg_13w_pct",
+        "open_interest_chg_4w_pct", "open_interest_chg_13w_pct"
+    ]
+    
+    # Check if NR columns exist
+    has_nr_oi = all(col in df.columns for col in ["nr_total_pct_oi", "nr_total_pct_oi_chg_1w_pp", "nr_long_flow_pct_oi", "nr_short_flow_pct_oi"])
+    if has_nr_oi:
+        required_cols.extend(["nr_total_pct_oi", "nr_total_pct_oi_chg_1w_pp", "nr_long_flow_pct_oi", "nr_short_flow_pct_oi"])
+    
+    # Check 1: Required columns exist
+    missing_cols = [col for col in required_cols if col not in df.columns]
+    if missing_cols:
+        errors.append(f"Missing OI v1 metrics columns: {', '.join(sorted(missing_cols))}")
+        return errors  # Early return if columns are missing
+    
+    # Sort by market_key and report_date for validation
+    df_sorted = df.sort_values(["market_key", "report_date"]).reset_index(drop=True)
+    
+    # Check 2: pct columns are finite or NaN (no inf/-inf)
+    pct_cols = [
+        "funds_total_pct_oi", "comm_total_pct_oi",
+        "funds_long_flow_pct_oi", "funds_short_flow_pct_oi",
+        "comm_long_flow_pct_oi", "comm_short_flow_pct_oi",
+        "oi_chg_1w_pct", "oi_chg_4w_pct", "oi_chg_13w_pct"
+    ]
+    if has_nr_oi:
+        pct_cols.extend(["nr_total_pct_oi", "nr_long_flow_pct_oi", "nr_short_flow_pct_oi"])
+    
+    for col in pct_cols:
+        if col not in df_sorted.columns:
+            continue
+        if not pd.api.types.is_numeric_dtype(df_sorted[col]):
+            errors.append(f"{col}: dtype is not numeric (got {df_sorted[col].dtype})")
+            continue
+        if df_sorted[col].dtype in [np.float64, np.float32]:
+            inf_mask = np.isinf(df_sorted[col])
+            inf_count = inf_mask.sum()
+            if inf_count > 0:
+                errors.append(f"{col}: found {inf_count} inf/-inf values (not allowed)")
+    
+    # Check 3: *_total_pct_oi in [0, 2.0] (soft upper bound, realistically <= 1.2)
+    total_pct_cols = ["funds_total_pct_oi", "comm_total_pct_oi"]
+    if has_nr_oi:
+        total_pct_cols.append("nr_total_pct_oi")
+    
+    for col in total_pct_cols:
+        if col not in df_sorted.columns:
+            continue
+        valid_values = df_sorted[col].dropna()
+        if len(valid_values) > 0:
+            negative = (valid_values < 0).sum()
+            if negative > 0:
+                errors.append(f"{col}: found {negative} negative values (must be >= 0)")
+            too_large = (valid_values > 2.0).sum()
+            if too_large > 0:
+                errors.append(f"{col}: found {too_large} values > 2.0 (soft upper bound exceeded, realistically <= 1.2)")
+    
+    # Check 4: open_interest_chg_1w_pct_abs_pos_5y in [0, 1] or NaN
+    if "open_interest_chg_1w_pct_abs_pos_5y" in df_sorted.columns:
+        valid_pos = df_sorted["open_interest_chg_1w_pct_abs_pos_5y"].dropna()
+        if len(valid_pos) > 0:
+            out_of_range = ((valid_pos < 0) | (valid_pos > 1)).sum()
+            if out_of_range > 0:
+                errors.append(
+                    f"open_interest_chg_1w_pct_abs_pos_5y: {out_of_range} values outside [0, 1] range "
+                    f"(min: {valid_pos.min():.6f}, max: {valid_pos.max():.6f})"
+                )
+    
+    # Check 5: oi_chg_4w_pct, oi_chg_13w_pct, open_interest_chg_4w_pct, open_interest_chg_13w_pct finite or NaN
+    trend_cols = ["oi_chg_4w_pct", "oi_chg_13w_pct", "open_interest_chg_4w_pct", "open_interest_chg_13w_pct"]
+    for col in trend_cols:
+        if col not in df_sorted.columns:
+            continue
+        if not pd.api.types.is_numeric_dtype(df_sorted[col]):
+            errors.append(f"{col}: dtype is not numeric (got {df_sorted[col].dtype})")
+            continue
+        if df_sorted[col].dtype in [np.float64, np.float32]:
+            inf_mask = np.isinf(df_sorted[col])
+            inf_count = inf_mask.sum()
+            if inf_count > 0:
+                errors.append(f"{col}: found {inf_count} inf/-inf values (not allowed)")
+    
+    # Check 6: WoW pp columns finite or NaN
+    pp_cols = ["funds_total_pct_oi_chg_1w_pp", "comm_total_pct_oi_chg_1w_pp"]
+    if has_nr_oi:
+        pp_cols.append("nr_total_pct_oi_chg_1w_pp")
+    
+    for col in pp_cols:
+        if col not in df_sorted.columns:
+            continue
+        if not pd.api.types.is_numeric_dtype(df_sorted[col]):
+            errors.append(f"{col}: dtype is not numeric (got {df_sorted[col].dtype})")
+            continue
+        if df_sorted[col].dtype in [np.float64, np.float32]:
+            inf_mask = np.isinf(df_sorted[col])
+            inf_count = inf_mask.sum()
+            if inf_count > 0:
+                errors.append(f"{col}: found {inf_count} inf/-inf values (not allowed)")
+    
+    # Check 6b: Flow columns finite or NaN
+    flow_cols = ["funds_long_flow_pct_oi", "funds_short_flow_pct_oi", "comm_long_flow_pct_oi", "comm_short_flow_pct_oi"]
+    if has_nr_oi:
+        flow_cols.extend(["nr_long_flow_pct_oi", "nr_short_flow_pct_oi"])
+    
+    for col in flow_cols:
+        if col not in df_sorted.columns:
+            continue
+        if not pd.api.types.is_numeric_dtype(df_sorted[col]):
+            errors.append(f"{col}: dtype is not numeric (got {df_sorted[col].dtype})")
+            continue
+        if df_sorted[col].dtype in [np.float64, np.float32]:
+            inf_mask = np.isinf(df_sorted[col])
+            inf_count = inf_mask.sum()
+            if inf_count > 0:
+                errors.append(f"{col}: found {inf_count} inf/-inf values (not allowed)")
+    
+    # Check 7: First-row NaN allowance per market_key for WoW-based columns (flows and pp)
+    wow_cols = pp_cols + flow_cols  # WoW pp columns and flow columns
+    for col in wow_cols:
+        if col not in df_sorted.columns:
+            continue
+        for market_key in df_sorted["market_key"].unique():
+            market_mask = df_sorted["market_key"] == market_key
+            market_data = df_sorted.loc[market_mask, [col, "report_date"]].sort_values("report_date")
+            
+            if len(market_data) == 0:
+                continue
+            
+            nan_mask = market_data[col].isna()
+            nan_count = nan_mask.sum()
+            
+            if nan_count > 1:
+                errors.append(
+                    f"{col}: {nan_count} NaN values for market_key '{market_key}' "
+                    f"(expected at most 1 NaN for first row)"
+                )
+            elif nan_count == 1:
+                # Check that NaN is in the first row (earliest report_date)
+                first_idx = market_data.index[0]
+                if not pd.isna(market_data.loc[first_idx, col]):
+                    errors.append(
+                        f"{col}: NaN not in first row for market_key '{market_key}' "
+                        f"(expected NaN only for first row)"
+                    )
     
     return errors

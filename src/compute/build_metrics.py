@@ -55,18 +55,29 @@ def build_metrics_weekly(
     metrics["comm_short"] = pd.to_numeric(df["comm_short"], errors="coerce")
     metrics["comm_total"] = metrics["comm_long"] + metrics["comm_short"]
     
+    # Check if NR columns exist in canonical
+    has_nr = "nr_long" in df.columns and "nr_short" in df.columns
+    if has_nr:
+        metrics["nr_long"] = pd.to_numeric(df["nr_long"], errors="coerce")
+        metrics["nr_short"] = pd.to_numeric(df["nr_short"], errors="coerce")
+        metrics["nr_total"] = metrics["nr_long"] + metrics["nr_short"]
+    
     # Net exposure metrics
     metrics["nc_net"] = metrics["nc_long"] - metrics["nc_short"]
     metrics["comm_net"] = metrics["comm_long"] - metrics["comm_short"]
     metrics["spec_vs_hedge_net"] = metrics["nc_net"] - metrics["comm_net"]
+    if has_nr:
+        metrics["nr_net"] = metrics["nr_long"] - metrics["nr_short"]
     
     # Open Interest: current value
     metrics["open_interest"] = pd.to_numeric(df["open_interest_all"], errors="coerce")
     
     # Heat-range columns for ALL window and 5Y rolling window
-    # Groups: nc, comm
+    # Groups: nc, comm, and optionally nr
     # Sides: long, short, total
     groups = ["nc", "comm"]
+    if has_nr:
+        groups.append("nr")
     sides = ["long", "short", "total"]
     
     # ALL window: min/max/pos across entire history per market_key
@@ -159,6 +170,10 @@ def build_metrics_weekly(
     metrics["spec_vs_hedge_net_chg_1w"] = metrics.groupby("market_key")["spec_vs_hedge_net"].transform(
         lambda x: x - x.shift(1)
     )
+    if has_nr:
+        metrics["nr_net_chg_1w"] = metrics.groupby("market_key")["nr_net"].transform(
+            lambda x: x - x.shift(1)
+        )
     
     # Open Interest weekly change
     # Ensure df is sorted by market_key and report_date for shift to work correctly
@@ -259,6 +274,132 @@ def build_metrics_weekly(
                 np.nan
             )
     
+    # OI v1 metrics: Change strength, participation, flows, multi-horizon
+    # A) OI change strength (abs percentile, 5Y)
+    metrics["open_interest_chg_1w_pct_abs"] = np.abs(metrics["open_interest_chg_1w_pct"])
+    
+    # Rolling 5Y min/max of abs change pct
+    min_abs_5y = metrics.groupby("market_key")["open_interest_chg_1w_pct_abs"].transform(
+        lambda x: x.rolling(window=260, min_periods=52).min()
+    )
+    max_abs_5y = metrics.groupby("market_key")["open_interest_chg_1w_pct_abs"].transform(
+        lambda x: x.rolling(window=260, min_periods=52).max()
+    )
+    
+    # Position: (curr - min) / (max - min) clipped 0..1
+    diff_abs_5y = max_abs_5y - min_abs_5y
+    metrics["open_interest_chg_1w_pct_abs_pos_5y"] = np.where(
+        (diff_abs_5y > 0) & min_abs_5y.notna() & max_abs_5y.notna(),
+        np.clip((metrics["open_interest_chg_1w_pct_abs"] - min_abs_5y) / diff_abs_5y, 0, 1),
+        np.nan
+    )
+    
+    # B) Participation / crowdedness (total as % of OI)
+    # funds_total = nc_total, comm_total = comm_total, nr_total = nr_total
+    if "open_interest" in metrics.columns:
+        oi_positive = metrics["open_interest"] > 0
+        metrics["funds_total_pct_oi"] = np.where(
+            oi_positive,
+            metrics["nc_total"] / metrics["open_interest"],
+            np.nan
+        )
+        metrics["comm_total_pct_oi"] = np.where(
+            oi_positive,
+            metrics["comm_total"] / metrics["open_interest"],
+            np.nan
+        )
+        if has_nr:
+            metrics["nr_total_pct_oi"] = np.where(
+                oi_positive,
+                metrics["nr_total"] / metrics["open_interest"],
+                np.nan
+            )
+        
+        # WoW changes in percentage points
+        funds_total_pct_prev = metrics.groupby("market_key")["funds_total_pct_oi"].shift(1)
+        metrics["funds_total_pct_oi_chg_1w_pp"] = (metrics["funds_total_pct_oi"] - funds_total_pct_prev) * 100
+        
+        comm_total_pct_prev = metrics.groupby("market_key")["comm_total_pct_oi"].shift(1)
+        metrics["comm_total_pct_oi_chg_1w_pp"] = (metrics["comm_total_pct_oi"] - comm_total_pct_prev) * 100
+        
+        if has_nr:
+            nr_total_pct_prev = metrics.groupby("market_key")["nr_total_pct_oi"].shift(1)
+            metrics["nr_total_pct_oi_chg_1w_pp"] = (metrics["nr_total_pct_oi"] - nr_total_pct_prev) * 100
+    
+    # C) Who moved (flows in %OI)
+    # Use oi_prev (shift(1)) for normalization
+    oi_prev = metrics.groupby("market_key")["open_interest"].shift(1)
+    oi_prev_positive = (oi_prev > 0) & oi_prev.notna()
+    
+    # Funds flows
+    metrics["funds_long_flow_pct_oi"] = np.where(
+        oi_prev_positive,
+        metrics["nc_long_chg_1w"] / oi_prev,
+        np.nan
+    )
+    metrics["funds_short_flow_pct_oi"] = np.where(
+        oi_prev_positive,
+        metrics["nc_short_chg_1w"] / oi_prev,
+        np.nan
+    )
+    
+    # Comm flows
+    metrics["comm_long_flow_pct_oi"] = np.where(
+        oi_prev_positive,
+        metrics["comm_long_chg_1w"] / oi_prev,
+        np.nan
+    )
+    metrics["comm_short_flow_pct_oi"] = np.where(
+        oi_prev_positive,
+        metrics["comm_short_chg_1w"] / oi_prev,
+        np.nan
+    )
+    
+    # NR flows (optional)
+    if has_nr:
+        metrics["nr_long_flow_pct_oi"] = np.where(
+            oi_prev_positive,
+            metrics["nr_long_chg_1w"] / oi_prev,
+            np.nan
+        )
+        metrics["nr_short_flow_pct_oi"] = np.where(
+            oi_prev_positive,
+            metrics["nr_short_chg_1w"] / oi_prev,
+            np.nan
+        )
+    
+    # D) Multi-horizon OI change (trend vs noise)
+    # 4-week change
+    oi_4w_prev = metrics.groupby("market_key")["open_interest"].shift(4)
+    oi_4w_prev_abs = np.abs(oi_4w_prev)
+    metrics["oi_chg_4w_pct"] = np.where(
+        oi_4w_prev.notna() & (oi_4w_prev_abs != 0),
+        (metrics["open_interest"] - oi_4w_prev) / oi_4w_prev_abs,
+        np.nan
+    )
+    
+    # 13-week change
+    oi_13w_prev = metrics.groupby("market_key")["open_interest"].shift(13)
+    oi_13w_prev_abs = np.abs(oi_13w_prev)
+    metrics["oi_chg_13w_pct"] = np.where(
+        oi_13w_prev.notna() & (oi_13w_prev_abs != 0),
+        (metrics["open_interest"] - oi_13w_prev) / oi_13w_prev_abs,
+        np.nan
+    )
+    
+    # Convenience alias for 1w
+    metrics["oi_chg_1w_pct"] = metrics["open_interest_chg_1w_pct"]
+    
+    # Also add open_interest_chg_4w_pct and open_interest_chg_13w_pct for consistency
+    metrics["open_interest_chg_4w_pct"] = metrics["oi_chg_4w_pct"]
+    metrics["open_interest_chg_13w_pct"] = metrics["oi_chg_13w_pct"]
+    
+    # Debug: log OI and flow columns
+    oi_cols = [c for c in metrics.columns if 'open_interest' in c]
+    flow_cols = [c for c in metrics.columns if c.endswith('_flow_pct_oi')]
+    logger.info(f"[compute][debug] OI columns present: {sorted(oi_cols)}")
+    logger.info(f"[compute][debug] Flow columns present: {sorted(flow_cols)}")
+    
     # Rebalance decomposition metrics (nc)
     metrics["nc_gross_chg_1w"] = np.abs(metrics["nc_long_chg_1w"]) + np.abs(metrics["nc_short_chg_1w"])
     metrics["nc_net_abs_chg_1w"] = np.abs(metrics["nc_net_chg_1w"])
@@ -281,6 +422,18 @@ def build_metrics_weekly(
         np.nan
     )
     
+    # Rebalance decomposition metrics (nr)
+    if has_nr:
+        metrics["nr_gross_chg_1w"] = np.abs(metrics["nr_long_chg_1w"]) + np.abs(metrics["nr_short_chg_1w"])
+        metrics["nr_net_abs_chg_1w"] = np.abs(metrics["nr_net_chg_1w"])
+        metrics["nr_rebalance_chg_1w"] = metrics["nr_gross_chg_1w"] - metrics["nr_net_abs_chg_1w"]
+        # rebalance_share: rebalance / gross, NaN if gross == 0
+        metrics["nr_rebalance_share_1w"] = np.where(
+            metrics["nr_gross_chg_1w"] > 0,
+            metrics["nr_rebalance_chg_1w"] / metrics["nr_gross_chg_1w"],
+            np.nan
+        )
+    
     # Net side indicators
     metrics["nc_net_side"] = np.where(
         metrics["nc_net"] > 0, "NET_LONG",
@@ -290,6 +443,11 @@ def build_metrics_weekly(
         metrics["comm_net"] > 0, "NET_LONG",
         np.where(metrics["comm_net"] < 0, "NET_SHORT", "FLAT")
     )
+    if has_nr:
+        metrics["nr_net_side"] = np.where(
+            metrics["nr_net"] > 0, "NET_LONG",
+            np.where(metrics["nr_net"] < 0, "NET_SHORT", "FLAT")
+        )
     
     # Net alignment
     metrics["net_alignment"] = np.where(
@@ -361,17 +519,21 @@ def build_metrics_weekly(
     metrics["nc_net_flip_1w"] = metrics.groupby("market_key")["nc_net"].transform(compute_flip)
     metrics["comm_net_flip_1w"] = metrics.groupby("market_key")["comm_net"].transform(compute_flip)
     metrics["spec_vs_hedge_net_flip_1w"] = metrics.groupby("market_key")["spec_vs_hedge_net"].transform(compute_flip)
+    if has_nr:
+        metrics["nr_net_flip_1w"] = metrics.groupby("market_key")["nr_net"].transform(compute_flip)
     
     # Debug: fingerprint log
     logger.info(f"[compute][debug] build_metrics.py file={os.path.abspath(__file__)}")
     chg_cols = [c for c in metrics.columns if c.endswith("_chg_1w")]
     logger.info(f"[compute][debug] chg_1w cols present={sorted(chg_cols)}")
     
-    # Assert: verify all 6 required columns are present
+    # Assert: verify all required columns are present
     required = {
         "nc_long_chg_1w", "nc_short_chg_1w", "nc_total_chg_1w",
         "comm_long_chg_1w", "comm_short_chg_1w", "comm_total_chg_1w",
     }
+    if has_nr:
+        required.update({"nr_long_chg_1w", "nr_short_chg_1w", "nr_total_chg_1w"})
     missing = sorted(required - set(metrics.columns))
     if missing:
         raise RuntimeError(f"[compute] missing *_chg_1w columns: {missing}")
