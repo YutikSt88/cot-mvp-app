@@ -174,7 +174,15 @@ def render_sidebar(current_page: str = "market") -> None:
                 set_selected_asset(None)
         
         # Conditional navigation button
+        # Note: st.switch_page() cannot be called during initial page render
+        # Use Streamlit's built-in page navigation instead
         if current_page != "overview":
             st.markdown("---")
-            if st.button("Go to Overview", type="primary", use_container_width=True):
-                st.switch_page("pages/overview.py")
+            # Link to overview page using markdown (safer than st.switch_page)
+            st.markdown(
+                '<a href="/pages/overview" target="_self" style="text-decoration: none;">'
+                '<button style="background-color: #FF4B4B; color: white; border: none; '
+                'padding: 10px 20px; border-radius: 5px; cursor: pointer; width: 100%;">'
+                'Go to Overview</button></a>',
+                unsafe_allow_html=True
+            )
