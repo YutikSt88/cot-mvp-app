@@ -29,15 +29,39 @@ def build_deploy_package():
     
     print(f"Building deploy package in: {deploy_dir}")
     
-    # Copy src/ (entire directory)
+    # Copy src/ (only app, common, and compute - NOT ingest/normalize/registry)
     src_source = root / "src"
     src_dest = deploy_dir / "src"
-    if src_source.exists():
-        shutil.copytree(src_source, src_dest, dirs_exist_ok=True)
-        print(f"  [OK] Copied src/")
-    else:
+    if not src_source.exists():
         print(f"  [ERROR] src/ not found")
         return False
+    
+    # Create src directory structure
+    src_dest.mkdir(exist_ok=True)
+    
+    # Copy src/__init__.py first
+    src_init_source = root / "src" / "__init__.py"
+    src_init_dest = deploy_dir / "src" / "__init__.py"
+    if src_init_source.exists():
+        shutil.copy2(src_init_source, src_init_dest)
+        print(f"  [OK] Copied src/__init__.py")
+    else:
+        print(f"  [ERROR] src/__init__.py not found")
+        return False
+    
+    # Copy only required subdirectories
+    required_src_dirs = ["app", "common", "compute"]
+    for subdir in required_src_dirs:
+        source_dir = src_source / subdir
+        dest_dir = src_dest / subdir
+        if source_dir.exists():
+            shutil.copytree(source_dir, dest_dir, dirs_exist_ok=True)
+            print(f"  [OK] Copied src/{subdir}/")
+        else:
+            print(f"  [ERROR] src/{subdir}/ not found")
+            return False
+    
+    print(f"  [OK] Copied src/ (app, common, compute only)")
     
     # Copy configs/ (entire directory)
     configs_source = root / "configs"
@@ -59,16 +83,26 @@ def build_deploy_package():
     else:
         print(f"  [WARNING] metrics_weekly.parquet not found")
     
-    # Copy README.md
-    readme_source = root / "README.md"
+    # Create deploy-friendly README.md (minimal)
     readme_dest = deploy_dir / "README.md"
-    if readme_source.exists():
-        shutil.copy2(readme_source, readme_dest)
-        print(f"  [OK] Copied README.md")
-    else:
-        # Create minimal README
-        readme_dest.write_text("# COT-MVP Streamlit App\n\nDeployed from cot-mvp repository.\n")
-        print(f"  [OK] Created minimal README.md")
+    readme_content = """# COT-MVP Streamlit App
+
+Deployed from [cot-mvp](https://github.com/YutikSt88/cot-mvp) repository.
+
+## Streamlit Cloud Deployment
+
+- **Main file:** `app.py`
+- **Repository:** YutikSt88/cot-mvp-app
+- **App URL:** cot-app.streamlit.app
+
+## Data Source
+
+Metrics computed from CFTC Commitment of Traders (COT) reports.
+
+See main repository for full pipeline documentation.
+"""
+    readme_dest.write_text(readme_content)
+    print(f"  [OK] Created deploy-friendly README.md")
     
     # Copy requirements.txt
     requirements_source = root / "requirements.txt"
@@ -123,6 +157,15 @@ def build_deploy_package():
         "*.zip",
     ]
     
+    # Forbidden directories that should not exist in deploy package
+    forbidden_dirs = [
+        "src/ingest",
+        "src/normalize",
+        "src/registry",
+        "docs",
+        "scripts",
+    ]
+    
     def should_exclude(path: Path) -> bool:
         """Check if path should be excluded."""
         path_str = str(path)
@@ -138,6 +181,18 @@ def build_deploy_package():
                 item.unlink()
             elif item.is_dir():
                 shutil.rmtree(item, ignore_errors=True)
+    
+    # Remove forbidden directories if they exist
+    for forbidden in forbidden_dirs:
+        forbidden_path = deploy_dir / forbidden
+        if forbidden_path.exists():
+            print(f"  [WARNING] Removing forbidden directory: {forbidden}")
+            shutil.rmtree(forbidden_path, ignore_errors=True)
+    
+    # Remove all __pycache__ directories
+    for pycache_dir in deploy_dir.rglob("__pycache__"):
+        if pycache_dir.is_dir():
+            shutil.rmtree(pycache_dir, ignore_errors=True)
     
     # Calculate sizes
     total_size = sum(f.stat().st_size for f in deploy_dir.rglob("*") if f.is_file())

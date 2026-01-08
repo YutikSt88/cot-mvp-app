@@ -104,8 +104,47 @@ def smoke_test_deploy():
     if requirements.exists():
         print(f"[OK] requirements.txt exists")
     else:
-        warnings.append("requirements.txt not found")
-        print(f"[WARNING] requirements.txt not found")
+        errors.append("requirements.txt not found")
+        print(f"[ERROR] requirements.txt not found")
+    
+    # Test 6: Check forbidden directories do NOT exist
+    forbidden_dirs = [
+        "docs",
+        "scripts",
+        "src/ingest",
+        "src/normalize",
+        "src/registry",
+    ]
+    print(f"\n[TEST] Checking for forbidden directories...")
+    for forbidden in forbidden_dirs:
+        forbidden_path = deploy_dir / forbidden
+        if forbidden_path.exists():
+            errors.append(f"Forbidden directory found: {forbidden}")
+            print(f"[ERROR] Forbidden directory found: {forbidden}")
+        else:
+            print(f"[OK] {forbidden} not present (correct)")
+    
+    # Test 7: Check required directories exist
+    required_dirs = [
+        "src/app",
+        "src/common",
+        "src/compute",
+        "configs",
+        "data/compute",
+        ".streamlit",
+    ]
+    print(f"\n[TEST] Checking required directories...")
+    for required in required_dirs:
+        required_path = deploy_dir / required
+        if required_path.exists():
+            print(f"[OK] {required} exists")
+        else:
+            if required == ".streamlit":
+                warnings.append(f"Optional directory missing: {required}")
+                print(f"[WARNING] Optional directory missing: {required}")
+            else:
+                errors.append(f"Required directory missing: {required}")
+                print(f"[ERROR] Required directory missing: {required}")
     
     # Test 5: Import test (verify src package structure works)
     import subprocess

@@ -113,6 +113,22 @@ if (-not (Test-Path $deploySource)) {
 Copy-Item -Path "$deploySource\*" -Destination $deployRepo -Recurse -Force
 Write-Host "[OK] Deploy package copied" -ForegroundColor Green
 
+# Step 8b: Write DEPLOY_VERSION.txt
+Write-Host "Writing DEPLOY_VERSION.txt..." -ForegroundColor Cyan
+$commitHash = git rev-parse HEAD -ErrorAction SilentlyContinue
+if (-not $commitHash) {
+    $commitHash = "unknown"
+}
+$timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+$deployVersionContent = @"
+DEPLOY VERSION
+Commit: $commitHash
+Timestamp: $timestamp
+Source: cot-mvp repository
+"@
+$deployVersionContent | Out-File -FilePath (Join-Path $deployRepo "DEPLOY_VERSION.txt") -Encoding UTF8
+Write-Host "[OK] DEPLOY_VERSION.txt created" -ForegroundColor Green
+
 # Step 9: Commit and push
 Write-Host "Step 9: Committing and pushing..." -ForegroundColor Cyan
 
