@@ -10,8 +10,10 @@ import yaml
 from src.common.paths import ProjectPaths
 
 
+@st.cache_data
 def get_project_paths():
     """Get project paths (cached)."""
+    # On Streamlit Cloud, root is the repo root
     root = Path(".").resolve()
     return ProjectPaths(root)
 
@@ -19,12 +21,19 @@ def get_project_paths():
 @st.cache_data
 def load_markets_config():
     """Load markets.yaml config (cached)."""
-    paths = get_project_paths()
-    config_path = paths.configs / "markets.yaml"
-    if not config_path.exists():
+    try:
+        paths = get_project_paths()
+        config_path = paths.configs / "markets.yaml"
+        if not config_path.exists():
+            st.warning(f"Markets config not found at: {config_path}")
+            return None
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        st.error(f"Error loading markets config: {e}")
+        import traceback
+        st.code(traceback.format_exc())
         return None
-    with open(config_path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
 
 
 @st.cache_data
